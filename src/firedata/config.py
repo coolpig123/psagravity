@@ -38,6 +38,7 @@ class FireConfig:
     tz_name: str = "PDT"           # local time shown on the web page
     tz_offset_h: float = -7        # local = UTC + offset (summer time)
     subtitle: str = ""             # one line for the web page header
+    notes: list[str] = field(default_factory=list)  # fire-specific findings for the README
 
     @property
     def root(self) -> Path:
@@ -90,6 +91,13 @@ CROSSWHITE = FireConfig(
     # final perimeter (-120.914, 44.338, -120.132, 44.952)
     bbox=(-121.3, 44.0, -119.75, 45.3),
     subtitle="Oregon, July-August 2026. Largest fire of the Rowe Creek Complex.",
+    notes=[
+        "Child incident of the ROWE CREEK COMPLEX (2026-ORPRD-000491, 373,929 acres). The README "
+        "listed ~343,000 acres: that is the incident size (342,923); the WFIGS perimeter is 355,065 acres.",
+        "WFIGS has no containment or fire-out date for this incident, and the perimeter is dated 2026-08-16.",
+        "Several other complex fires burned next to it (0449 Porcupine Ridge, 0456, 0476 Hoag, 0567 Little Buck); "
+        "detections closer to them are excluded.",
+    ],
 )
 
 COLWASH = FireConfig(
@@ -105,6 +113,10 @@ COLWASH = FireConfig(
     # final perimeter (-120.200, 46.086, -119.756, 46.201)
     bbox=(-120.55, 45.85, -119.4, 46.45),
     subtitle="Washington, August 2026. 39,000 acres in under a day.",
+    notes=[
+        "The official perimeter is dated 2026-08-23 00:20 UTC, 9.4 h after discovery, and was not updated later. "
+        "Containment was 2026-08-23 12:53 UTC.",
+    ],
 )
 
 BISCAR = FireConfig(
@@ -120,6 +132,11 @@ BISCAR = FireConfig(
     # final perimeter (-120.307, 40.549, -119.958, 40.738); WFIGS origin lies ~2 km outside it
     bbox=(-120.65, 40.25, -119.6, 41.05),
     subtitle="Northeastern California, July-August 2026.",
+    notes=[
+        "The WFIGS point of origin (40.545702, -120.331628) lies ~2 km outside the final perimeter.",
+        "The official perimeter is dated 2026-07-24 but containment was 2026-08-09: growth after Jul 24, "
+        "if any, is not in the official perimeter.",
+    ],
 )
 
 FIRES = {f.slug: f for f in [BUG_FIRE, CROSSWHITE, COLWASH, BISCAR]}
