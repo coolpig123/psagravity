@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[2]   # the real_fires/ project folder (data/, docs/, app/, .env)
 load_dotenv(REPO_ROOT / ".env")
 
 

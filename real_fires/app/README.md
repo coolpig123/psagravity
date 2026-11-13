@@ -9,6 +9,7 @@ Both are generated; do not edit them by hand. The page template is
 `src/firedata/templates/fire_page.html` and the builder is `firedata.web.build_app`.
 
 ```bash
+# from real_fires/
 python -m firedata.web bug_fire colwash biscar crosswhite --app   # rebuild app/
 python scripts/test_app.py app/index.html                        # browser test (requirements-dev.txt)
 ```

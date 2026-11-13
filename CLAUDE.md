@@ -24,28 +24,33 @@ by NISAR since June 2026.
   NISAR GCOV same-track pre/post pairs (compare only within a track, see issue #7):
   A34 07-22 → 08-15, D42 07-23 → 08-16, A106 07-27 → 08-20 (13:09 / 02:55 / 13:01 UTC).
 - Done (US, branch more-fires): Crosswhite (OR, merged lightning fires, 355,065 ac), Colwash (WA, 39,103 ac in
-  < 1 day), Biscar (CA, 69,352 ac). Configs in `src/firedata/config.py`; summary in `docs/fires_summary.md`.
+  < 1 day), Biscar (CA, 69,352 ac). Configs in `real_fires/src/firedata/config.py`; summary in `real_fires/docs/fires_summary.md`.
 - Europe later (needs EUMETSAT / LSA SAF accounts; no GOES, FEDS or WFIGS there): Ávila (ES), Le Porge (FR).
-- Pipeline: `scripts/build_ground_truth.py <fire>`, then `python -m firedata.report readme|summary`,
+- Pipeline (run from `real_fires/`): `scripts/build_ground_truth.py <fire>`, then `python -m firedata.report readme|summary`,
   `python -m firedata.web <fires> --app`, browser test `scripts/test_app.py`.
 
 ## Layout
 
 ```
-data/fires/<fire>/{raw,processed,figures}/ + README.md   # raw/ is never committed
-src/                                                     # reusable functions (repeat per fire)
-notebooks/, app/, docs/
+README.md, CLAUDE.md, .gitignore, docs/architecture.png   # the only things in the repo root
+real_fires/                                              # ground truth from real fires
+  src/firedata/                                          # reusable functions (repeat per fire)
+  scripts/                                               # build_ground_truth.py, test_app.py
+  data/fires/<fire>/{raw,processed,figures}/ + README.md # raw/ is never committed
+  docs/                                                  # fires_summary.md / .csv
+  app/                                                   # the site
+  .env (not committed), .env.example, requirements*.txt, pyproject.toml
 ```
 
-Never put new files in the repo root. Every output goes in a folder with a clear name (app/, docs/,
-data/fires/<fire>/, scripts/, src/). Temporary files go outside the repo.
+Never put new files in the repo root. Every output goes in a folder with a clear name (real_fires/app/,
+real_fires/docs/, real_fires/data/fires/<fire>/, real_fires/scripts/, real_fires/src/). Temporary files go outside the repo.
 
 ## Conventions
 
-- Python venv in `.venv`, dependencies pinned in `requirements.txt`.
+- Python venv in `.venv`, dependencies pinned in `real_fires/requirements.txt`.
 - All times in UTC.
-- Secrets (Earthdata login, FIRMS MAP_KEY) live in `.env`, never committed.
-- `data/**/raw` and `.env` are in `.gitignore`.
+- Secrets (Earthdata login, FIRMS MAP_KEY) live in `real_fires/.env`, never committed.
+- `real_fires/data/**/raw` and `**/.env` are in `.gitignore`.
 - If data is unavailable or differs from what was specified (dates, sizes, endpoints),
   report it to the user instead of guessing.
 
