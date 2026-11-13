@@ -64,6 +64,26 @@ def frp_timeseries(viirs: pd.DataFrame, goes: pd.DataFrame, scans: pd.DataFrame)
     return pd.concat(parts, ignore_index=True).sort_values("time_utc").reset_index(drop=True)
 
 
+def viirs_footprint(viirs: pd.DataFrame) -> gpd.GeoSeries:
+    """Union of the VIIRS pixel footprints (scan x track km rectangles): the area ever seen burning."""
+    from shapely.geometry import box
+    pts = gpd.GeoSeries(gpd.points_from_xy(viirs.lon, viirs.lat), crs=4326).to_crs(EQUAL_AREA)
+    hx, hy = viirs.scan_km.to_numpy() * 500, viirs.track_km.to_numpy() * 500
+    boxes = [box(p.x - a, p.y - b, p.x + a, p.y + b) for p, a, b in zip(pts, hx, hy)]
+    return gpd.GeoSeries([gpd.GeoSeries(boxes).union_all()], crs=EQUAL_AREA)
+
+
+def area_comparison(final: gpd.GeoDataFrame, perims: gpd.GeoDataFrame, viirs: pd.DataFrame) -> dict:
+    w = final.to_crs(EQUAL_AREA).geometry.iloc[0]
+    f = perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()]
+    v = viirs_footprint(viirs).iloc[0]
+    km2 = lambda g: round(g.area / 1e6, 2)
+    return {"wfigs_final_km2": km2(w), "feds_final_km2": km2(f), "overlap_km2": km2(w.intersection(f)),
+            "feds_outside_wfigs_km2": km2(f.difference(w)), "wfigs_not_in_feds_km2": km2(w.difference(f)),
+            "viirs_footprint_km2": km2(v), "viirs_footprint_in_wfigs_km2": km2(v.intersection(w)),
+            "feds_fraction_of_wfigs": round(f.area / w.area, 3)}
+
+
 def latest_perimeter_at(perims: gpd.GeoDataFrame, when: pd.Timestamp) -> pd.Series | None:
     """Most recent FEDS perimeter observed at or before `when`."""
     before = perims[perims.obs_time_utc <= when]

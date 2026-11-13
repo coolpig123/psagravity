@@ -185,8 +185,54 @@ def viirs_frp_map(F: FireConfig, points: pd.DataFrame, final: gpd.GeoDataFrame, 
     fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
-def make_all(F: FireConfig, points, perims, final, frp, fig_dir: Path):
+def feds_vs_wfigs_map(F: FireConfig, perims: gpd.GeoDataFrame, final: gpd.GeoDataFrame,
+                      points: pd.DataFrame, out: Path, merged: pd.DataFrame | None = None):
+    """Final FEDS perimeter vs official WFIGS perimeter, with VIIRS detections for context."""
+    w = final.to_crs(EQUAL_AREA)
+    fe = perims.iloc[[perims.step_utc.argmax()]].to_crs(EQUAL_AREA)
+    wa, fa = w.area.iloc[0] / 1e6, fe.area.iloc[0] / 1e6
+    inter = w.geometry.iloc[0].intersection(fe.geometry.iloc[0]).area / 1e6
+    v = points[points.source.str.startswith("VIIRS")]
+
+    fig, ax = plt.subplots(figsize=(8, 7.2))
+    ax.grid(False)
+    w.to_crs(3857).plot(ax=ax, color="#9a9890", alpha=0.35, edgecolor="none", zorder=2)
+    w.to_crs(3857).boundary.plot(ax=ax, color=INK, lw=1.1, zorder=4)
+    fe.to_crs(3857).plot(ax=ax, color=SERIES["GOES18_FDC"], alpha=0.85, edgecolor=SURFACE, lw=0.5, zorder=3)
+    vp = gpd.GeoSeries(gpd.points_from_xy(v.lon, v.lat), crs=4326).to_crs(3857)
+    ax.scatter(vp.x, vp.y, s=2, color=INK, alpha=0.5, zorder=5, edgecolor="none")
+    ig = gpd.GeoSeries(gpd.points_from_xy([F.ignition_lon], [F.ignition_lat]), crs=4326).to_crs(3857)
+    ax.scatter(ig.x, ig.y, marker="*", s=180, color="#e34948", edgecolor=SURFACE, lw=1, zorder=6)
+    if merged is not None and not merged.empty:
+        mp = gpd.GeoSeries(gpd.points_from_xy(merged.InitialLongitude, merged.InitialLatitude), crs=4326).to_crs(3857)
+        ax.scatter(mp.x, mp.y, marker="^", s=90, color="#eda100", edgecolor=INK, lw=0.8, zorder=6)
+        for (_, r), p in zip(merged.iterrows(), mp):
+            ax.annotate(f"{r.IncidentName} origin\n({r.IncidentSize:,.0f} ac)", (p.x, p.y), xytext=(8, 6),
+                        textcoords="offset points", fontsize=7.5, color=INK,
+                        bbox=dict(facecolor=SURFACE, edgecolor="none", alpha=0.8, pad=1))
+    pad = 2500
+    x0, y0, x1, y1 = w.to_crs(3857).total_bounds
+    ax.set_xlim(x0 - pad, x1 + pad); ax.set_ylim(y0 - pad, y1 + pad)
+    _basemap(ax, 3857)
+    ax.set_xticks([]); ax.set_yticks([]); ax.set_xlabel(""); ax.set_ylabel("")
+    handles = [
+        matplotlib.patches.Patch(facecolor="#9a9890", alpha=0.35, edgecolor=INK,
+                                 label=f"NIFC WFIGS final: {wa:,.1f} km² ({wa * 247.105:,.0f} acres)"),
+        matplotlib.patches.Patch(facecolor=SERIES["GOES18_FDC"], alpha=0.85,
+                                 label=f"FEDS final (fireid {int(fe.fireid.iloc[0])}): {fa:,.1f} km² ({fa * 247.105:,.0f} acres)"),
+        matplotlib.lines.Line2D([], [], marker="o", ls="", color=INK, alpha=0.5, ms=3,
+                                label=f"VIIRS 375 m detections ({len(v):,})"),
+    ]
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0, -0.01), fontsize=8)
+    ax.set_title(f"{F.name}: FEDS vs official final perimeter")
+    ax.text(0.99, -0.02, f"Overlap {inter:,.1f} km²\nFEDS = {fa / wa:.0%} of WFIGS",
+            transform=ax.transAxes, ha="right", va="top", fontsize=8, color=INK2)
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+
+def make_all(F: FireConfig, points, perims, final, frp, fig_dir: Path, merged: pd.DataFrame | None = None):
     fig_dir = Path(fig_dir)
+    feds_vs_wfigs_map(F, perims, final, points, fig_dir / "feds_vs_wfigs_final.png", merged)
     perimeter_map(F, perims, final, fig_dir / "perimeters_12h_map.png")
     burned_area(F, perims, final, fig_dir / "burned_area_vs_time.png")
     frp_timeseries(F, frp, final, fig_dir / "frp_vs_time.png")

@@ -63,6 +63,29 @@ def download_incident(name: str, min_acres: float, raw_dir: Path) -> pd.DataFram
     return _ms_to_utc(pd.DataFrame(g.drop(columns="geometry")))
 
 
+def incidents_within(perimeter: gpd.GeoDataFrame, start_utc, end_utc, raw_dir: Path) -> pd.DataFrame:
+    """Other WFIGS incidents whose point of origin lies inside `perimeter` and were discovered
+    in [start, end): fires that merged into the target fire (e.g. Fred Mt into Bug)."""
+    path = Path(raw_dir) / "wfigs_incidents_within.geojson"
+    if not path.exists():
+        where = (f"FireDiscoveryDateTime >= TIMESTAMP '{start_utc:%Y-%m-%d %H:%M:%S}' "
+                 f"AND FireDiscoveryDateTime < TIMESTAMP '{end_utc:%Y-%m-%d %H:%M:%S}'")
+        j = _query_geojson(INCIDENTS, {
+            "where": where, "geometry": ",".join(map(str, perimeter.total_bounds)),
+            "geometryType": "esriGeometryEnvelope", "inSR": 4326, "spatialRel": "esriSpatialRelIntersects"})
+        path.write_text(json.dumps(j))
+    g = gpd.read_file(path)
+    if g.empty:
+        return pd.DataFrame()
+    pts = gpd.GeoSeries(gpd.points_from_xy(g.InitialLongitude, g.InitialLatitude), crs=4326)
+    inside = pts.within(perimeter.to_crs(4326).geometry.union_all())
+    target_id = perimeter.attr_UniqueFireIdentifier.iloc[0]
+    g = g[inside.to_numpy() & (g.UniqueFireIdentifier != target_id).to_numpy()]
+    cols = ["IncidentName", "UniqueFireIdentifier", "FireDiscoveryDateTime", "InitialLatitude",
+            "InitialLongitude", "IncidentSize", "DiscoveryAcres"]
+    return _ms_to_utc(pd.DataFrame(g[cols])).reset_index(drop=True)
+
+
 def select_fire(perims: gpd.GeoDataFrame, name: str, min_acres: float) -> gpd.GeoDataFrame:
     sel = perims[(perims["poly_IncidentName"].str.lower() == name.lower())
                  & (perims["attr_IncidentSize"].fillna(perims["poly_GISAcres"]) >= min_acres)]
