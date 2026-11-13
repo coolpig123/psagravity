@@ -16,9 +16,9 @@
     },
     {
       "name": "Colwash (WA)",
-      "status": "running",
+      "status": "done",
       "est": 45,
-      "actual": 5
+      "actual": 25
     },
     {
       "name": "Biscar (CA)",
@@ -45,7 +45,8 @@
   "done": [
     "Step 0 (PR #6): CLAUDE.md fixed (ignition 22:30 UTC, growth ended ~Aug 13); live page moved to `firedata.web.build_page()`.",
     "Issue #7: posted the NISAR track-pairing correction (07-22→08-15 A34, 07-23→08-16 D42, 07-27→08-20 A106).",
-    "Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers."
+    "Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers.",
+    "Colwash (WA): done. VIIRS covers only 6% of the official area; GOES saw the fire 48 min after discovery and covers 100% (coarse pixels); FEDS IoU 3%. 4 NISAR same-track pairs (12-day gaps). README + interactive page."
   ],
   "problems": [
     "Branch: `more-fires` is based on `bug-fire-data` (PR #6, not merged) because master has no `src/` yet. The new PR is stacked on #6.",
@@ -54,7 +55,9 @@
     "Colwash: official perimeter dated 9.4 h after discovery and never updated.",
     "FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²).",
     "FEDS: fire ids are not unique across FEDS regions; Crosswhite is tracked twice (CONUS 63374 and BorealNA 9744). Pipeline now keys by (id, region) and keeps CONUS.",
-    "FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached."
+    "FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached.",
+    "Colwash: WFIGS point of origin is ~1.4 km north of the final perimeter.",
+    "Growth-end rule: when FEDS is too small, the pipeline now uses 95% of GOES fire energy (Colwash: 2026-08-23 04:26 UTC). For Bug the GOES rule would give Aug 11 23:26 vs the FEDS rule's Aug 13 09:30 (Bug keeps the FEDS rule)."
   ],
   "questions": []
 }
