@@ -35,6 +35,9 @@ class FireConfig:
     feds_fireid: float | None = None
     goes_end_utc: pd.Timestamp | None = None  # GOES window end (defaults to end_utc)
     nisar_passes_utc: dict[str, list[pd.Timestamp]] = field(default_factory=dict)
+    tz_name: str = "PDT"           # local time shown on the web page
+    tz_offset_h: float = -7        # local = UTC + offset (summer time)
+    subtitle: str = ""             # one line for the web page header
 
     @property
     def root(self) -> Path:
@@ -53,17 +56,18 @@ BUG_FIRE = FireConfig(
     name="Bug Fire, CA/NV",
     wfigs_name="Bug",
     wfigs_min_acres=1000,
-    # User-provided ignition point and time. WFIGS lists discovery 2026-08-08 22:30:49 UTC
-    # at 39.726833, -120.035167 (see data/fires/bug_fire/README.md).
+    # Ignition time = WFIGS discovery (the brief said 23:08 UTC). The point is the brief's;
+    # WFIGS origin 39.726833, -120.035167 is ~200 m away (see data/fires/bug_fire/README.md).
     ignition_lat=39.727395,
     ignition_lon=-120.0372941,
-    ignition_utc=T("2026-08-08 23:08", tz="UTC"),
+    ignition_utc=T("2026-08-08 22:30:49", tz="UTC"),
     start_utc=T("2026-08-08 00:00", tz="UTC"),
     end_utc=T("2026-08-28 00:00", tz="UTC"),
     # Final WFIGS perimeter is (-120.042, 39.690, -119.709, 39.969); search box adds a margin
     # wide enough to catch neighbouring fires (Stallion, Hawk) so they can be excluded.
     bbox=(-120.6, 39.2, -119.4, 40.3),
     feds_fireid=69872.0,
+    subtitle="California / Nevada, August 2026. Where the fire burned, hour by hour.",
     nisar_passes_utc={
         "pre": [T("2026-07-23 02:55", tz="UTC"), T("2026-07-27 13:01", tz="UTC")],
         "post": [T("2026-08-15 13:09", tz="UTC"), T("2026-08-16 02:55", tz="UTC"),
