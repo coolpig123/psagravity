@@ -37,6 +37,9 @@ src/                                                     # reusable functions (r
 notebooks/, app/, docs/
 ```
 
+Never put new files in the repo root. Every output goes in a folder with a clear name (app/, docs/,
+data/fires/<fire>/, scripts/, src/). Temporary files go outside the repo.
+
 ## Conventions
 
 - Python venv in `.venv`, dependencies pinned in `requirements.txt`.
