@@ -1,0 +1,63 @@
+{
+  "fire": "Crosswhite Fire, OR",
+  "official_area_km2": 1441.1,
+  "official_acres": 355065,
+  "items": {
+    "FEDS": {
+      "source": "NASA FEDS VIIRS modeled fire perimeters (VEDA OGC API, *_nrt)",
+      "time_range": "2026-07-16 09:30 to 2026-08-26 09:30 UTC",
+      "resolution": "polygons from 375 m VIIRS pixels",
+      "update_rate": "12 h",
+      "coverage": "65 perimeters with new data (92 steps); fire id(s) 63374",
+      "metrics": {
+        "feds_iou": 64.1,
+        "feds_area_ratio": 95.5
+      }
+    },
+    "VIIRS": {
+      "source": "VIIRS 375 m active fire, S-NPP + NOAA-20 + NOAA-21 (NASA FIRMS, VIIRS_NOAA20_NRT, VIIRS_NOAA20_SP, VIIRS_NOAA21_NRT, VIIRS_NOAA21_SP, VIIRS_SNPP_NRT, VIIRS_SNPP_SP)",
+      "time_range": "2026-07-16 10:05 to 2026-08-23 10:38 UTC",
+      "resolution": "375 m (pixel grows to ~0.8 km at scan edge)",
+      "update_rate": "~6 overpasses/day (3 satellites × day/night)",
+      "coverage": "41,937 detections",
+      "metrics": {
+        "viirs_cover": 83.1,
+        "viirs_inside": 92.5,
+        "ignition_error_min": 553,
+        "ignition_dist_km": 61.23
+      }
+    },
+    "GOES": {
+      "source": "GOES-18 ABI L2 FDC, CONUS sector (NOAA, AWS)",
+      "time_range": "2026-07-16 00:41 to 2026-08-19 20:21 UTC",
+      "resolution": "2 km nominal; ~7.7 km² per pixel here",
+      "update_rate": "5 min",
+      "coverage": "39,336 fire pixels in 10,363 scans",
+      "metrics": {
+        "goes_cover": 96.3,
+        "goes_inside": 71.6,
+        "ignition_error_min": -11,
+        "ignition_dist_km": 3.16
+      }
+    },
+    "Final perimeter": {
+      "source": "NIFC WFIGS interagency perimeter (2026-ORPRD-000445)",
+      "time_range": "perimeter dated 2026-08-16 05:53 UTC",
+      "resolution": "mapped polygon (Mixed Methods)",
+      "update_rate": "final only (no history)",
+      "coverage": "355,065 acres (1,441.1 km²)",
+      "metrics": {},
+      "reference": true
+    },
+    "NISAR GCOV": {
+      "source": "NISAR L2 GCOV (ASF), standard production",
+      "time_range": "A106: 07-15 → 08-20; A5: 07-08 → 08-13; D71: 07-13 → 08-18; D143: 07-06 → 08-23",
+      "resolution": "L-band HH/HV, geocoded grid",
+      "update_rate": "12-day repeat per track; several tracks",
+      "coverage": "32 passes, 4 same-track pre/post pairs (shortest gap 36 days)",
+      "metrics": {},
+      "na": "burn-scar agreement not computed yet (issue #7)"
+    }
+  },
+  "all_cover": 98.6
+}

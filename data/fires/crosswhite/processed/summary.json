@@ -1,0 +1,549 @@
+{
+  "fire": "Crosswhite Fire, OR",
+  "wfigs": {
+    "unique_fire_id": "2026-ORPRD-000445",
+    "discovery_utc": "2026-07-16 00:51:54+00:00",
+    "origin_lat": 44.803333,
+    "origin_lon": -120.199167,
+    "containment_utc": "NaT",
+    "fire_out_utc": "NaT",
+    "final_acres": 355064.5580676493,
+    "perimeter_date_utc": "2026-08-16 05:53:00+00:00"
+  },
+  "feds": {
+    "fireids": [
+      63374.0
+    ],
+    "n_steps": 92,
+    "max_area_km2": 1376.655473133378,
+    "max_area_acres": 340178.45068862336,
+    "last_growth_step_utc": "2026-08-26 00:00:00+00:00"
+  },
+  "feds_fire_ids_in_bbox": [
+    {
+      "fireid": "9744.0",
+      "n": "86",
+      "t_first": "2026-07-16T00:00:00",
+      "t_last": "2026-08-23T00:00:00",
+      "max_farea_km2": "1399.8814826397986"
+    },
+    {
+      "fireid": "9766.0",
+      "n": "16",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-19T12:00:00",
+      "max_farea_km2": "13.639292320926705"
+    },
+    {
+      "fireid": "9767.0",
+      "n": "14",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-18T12:00:00",
+      "max_farea_km2": "11.181994217640876"
+    },
+    {
+      "fireid": "9806.0",
+      "n": "30",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-26T12:00:00",
+      "max_farea_km2": "33.7264014802348"
+    },
+    {
+      "fireid": "9889.0",
+      "n": "62",
+      "t_first": "2026-07-17T00:00:00",
+      "t_last": "2026-08-12T00:00:00",
+      "max_farea_km2": "76.98504953338585"
+    },
+    {
+      "fireid": "10459.0",
+      "n": "12",
+      "t_first": "2026-07-23T00:00:00",
+      "t_last": "2026-07-24T00:00:00",
+      "max_farea_km2": "9.103209944641206"
+    },
+    {
+      "fireid": "10488.0",
+      "n": "50",
+      "t_first": "2026-07-23T12:00:00",
+      "t_last": "2026-08-12T12:00:00",
+      "max_farea_km2": "313.37813954429794"
+    },
+    {
+      "fireid": "10595.0",
+      "n": "25",
+      "t_first": "2026-07-25T00:00:00",
+      "t_last": "2026-08-01T12:00:00",
+      "max_farea_km2": "231.9399186488325"
+    },
+    {
+      "fireid": "10599.0",
+      "n": "57",
+      "t_first": "2026-07-29T12:00:00",
+      "t_last": "2026-08-24T00:00:00",
+      "max_farea_km2": "413.2677371401466"
+    },
+    {
+      "fireid": "63374.0",
+      "n": "80",
+      "t_first": "2026-07-16T00:00:00",
+      "t_last": "2026-08-23T00:00:00",
+      "max_farea_km2": "1373.7055514500205"
+    },
+    {
+      "fireid": "63455.0",
+      "n": "15",
+      "t_first": "2026-07-16T00:00:00",
+      "t_last": "2026-07-18T12:00:00",
+      "max_farea_km2": "10.766126190790324"
+    },
+    {
+      "fireid": "63559.0",
+      "n": "14",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-18T12:00:00",
+      "max_farea_km2": "12.825246835464105"
+    },
+    {
+      "fireid": "63577.0",
+      "n": "31",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-27T00:00:00",
+      "max_farea_km2": "19.119640950484392"
+    },
+    {
+      "fireid": "63578.0",
+      "n": "26",
+      "t_first": "2026-07-16T12:00:00",
+      "t_last": "2026-07-24T12:00:00",
+      "max_farea_km2": "9.850026367933115"
+    },
+    {
+      "fireid": "63692.0",
+      "n": "28",
+      "t_first": "2026-07-17T00:00:00",
+      "t_last": "2026-07-26T00:00:00",
+      "max_farea_km2": "65.78778809202436"
+    },
+    {
+      "fireid": "65165.0",
+      "n": "14",
+      "t_first": "2026-07-23T00:00:00",
+      "t_last": "2026-07-25T00:00:00",
+      "max_farea_km2": "9.47876961387476"
+    },
+    {
+      "fireid": "65401.0",
+      "n": "67",
+      "t_first": "2026-07-23T12:00:00",
+      "t_last": "2026-08-21T00:00:00",
+      "max_farea_km2": "320.6119550751909"
+    },
+    {
+      "fireid": "65487.0",
+      "n": "25",
+      "t_first": "2026-07-25T00:00:00",
+      "t_last": "2026-08-01T12:00:00",
+      "max_farea_km2": "234.2440416033442"
+    },
+    {
+      "fireid": "65489.0",
+      "n": "53",
+      "t_first": "2026-07-29T12:00:00",
+      "t_last": "2026-08-24T00:00:00",
+      "max_farea_km2": "422.00468198257755"
+    }
+  ],
+  "feds_fire_ids_selected": [
+    {
+      "fireid": "9744.0",
+      "region": "BorealNA",
+      "n_steps": "86",
+      "max_area_km2": "1402.89",
+      "overlap_km2": "1117.18",
+      "frac_inside": "0.796",
+      "selected": "False",
+      "reason": "duplicate of CONUS 63374"
+    },
+    {
+      "fireid": "63374.0",
+      "region": "CONUS",
+      "n_steps": "80",
+      "max_area_km2": "1376.66",
+      "overlap_km2": "1100.71",
+      "frac_inside": "0.8",
+      "selected": "True",
+      "reason": "inside official perimeter"
+    },
+    {
+      "fireid": "63559.0",
+      "region": "CONUS",
+      "n_steps": "14",
+      "max_area_km2": "12.85",
+      "overlap_km2": "0.0",
+      "frac_inside": "0.0",
+      "selected": "False",
+      "reason": "< 20% inside"
+    },
+    {
+      "fireid": "9767.0",
+      "region": "BorealNA",
+      "n_steps": "14",
+      "max_area_km2": "11.21",
+      "overlap_km2": "0.0",
+      "frac_inside": "0.0",
+      "selected": "False",
+      "reason": "< 20% inside"
+    }
+  ],
+  "growth_end_utc": "2026-08-11 09:30:00+00:00",
+  "growth_end_rule": "last FEDS step adding > 250 acres",
+  "nisar_pairs": [
+    {
+      "track_id": "A106",
+      "pre_utc": "2026-07-15 13:02:55+00:00",
+      "post_utc": "2026-08-20 13:02:53+00:00",
+      "gap_days": "36.0"
+    },
+    {
+      "track_id": "A5",
+      "pre_utc": "2026-07-08 12:54:35+00:00",
+      "post_utc": "2026-08-13 12:54:33+00:00",
+      "gap_days": "36.0"
+    },
+    {
+      "track_id": "D71",
+      "pre_utc": "2026-07-13 03:11:04+00:00",
+      "post_utc": "2026-08-18 03:11:02+00:00",
+      "gap_days": "36.0"
+    },
+    {
+      "track_id": "D143",
+      "pre_utc": "2026-07-06 03:02:45+00:00",
+      "post_utc": "2026-08-23 03:02:42+00:00",
+      "gap_days": "48.0"
+    }
+  ],
+  "merged_incidents": [
+    {
+      "IncidentName": "0512 BOX SPRINGS",
+      "UniqueFireIdentifier": "2026-OR951S-000512",
+      "FireDiscoveryDateTime": "2026-07-17 22:00:00+00:00",
+      "InitialLatitude": "44.635333",
+      "InitialLongitude": "-120.4985",
+      "IncidentSize": "21432.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0442 REDROCK",
+      "UniqueFireIdentifier": "2026-ORPRD-000442",
+      "FireDiscoveryDateTime": "2026-07-16 00:41:00+00:00",
+      "InitialLatitude": "44.759376",
+      "InitialLongitude": "-120.214254",
+      "IncidentSize": "256.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0611 GREEN MOUNTAIN",
+      "UniqueFireIdentifier": "2026-OROCF-000611",
+      "FireDiscoveryDateTime": "2026-07-24 15:46:23+00:00",
+      "InitialLatitude": "44.440624",
+      "InitialLongitude": "-120.696424",
+      "IncidentSize": "2136.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0502",
+      "UniqueFireIdentifier": "2026-ORPRD-000502",
+      "FireDiscoveryDateTime": "2026-07-17 00:58:21+00:00",
+      "InitialLatitude": "44.829331",
+      "InitialLongitude": "-120.297013",
+      "IncidentSize": "1816.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0501 PAT'S CABIN",
+      "UniqueFireIdentifier": "2026-ORPRD-000501",
+      "FireDiscoveryDateTime": "2026-07-16 23:27:15+00:00",
+      "InitialLatitude": "44.744019",
+      "InitialLongitude": "-120.356115",
+      "IncidentSize": "772.0",
+      "DiscoveryAcres": "1.0"
+    },
+    {
+      "IncidentName": "0433 BREWER",
+      "UniqueFireIdentifier": "2026-OR951S-000433",
+      "FireDiscoveryDateTime": "2026-07-15 23:29:00+00:00",
+      "InitialLatitude": "44.588568",
+      "InitialLongitude": "-120.907094",
+      "IncidentSize": "70821.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0450 COVE CREEK",
+      "UniqueFireIdentifier": "2026-ORPRD-000450",
+      "FireDiscoveryDateTime": "2026-07-16 01:08:00+00:00",
+      "InitialLatitude": "44.88679",
+      "InitialLongitude": "-120.336253",
+      "IncidentSize": "7208.0",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0571",
+      "UniqueFireIdentifier": "2026-OROCF-000571",
+      "FireDiscoveryDateTime": "2026-07-23 02:51:55+00:00",
+      "InitialLatitude": "44.492552",
+      "InitialLongitude": "-120.430412",
+      "IncidentSize": "0.1",
+      "DiscoveryAcres": "0.1"
+    },
+    {
+      "IncidentName": "0468",
+      "UniqueFireIdentifier": "2026-OROCF-000468",
+      "FireDiscoveryDateTime": "2026-07-16 12:37:20+00:00",
+      "InitialLatitude": "44.541629",
+      "InitialLongitude": "-120.555818",
+      "IncidentSize": "0.1",
+      "DiscoveryAcres": "0.01"
+    }
+  ],
+  "area_comparison": {
+    "wfigs_final_km2": 1436.9,
+    "feds_final_km2": 1376.66,
+    "overlap_km2": 1097.0,
+    "feds_outside_wfigs_km2": 279.65,
+    "wfigs_not_in_feds_km2": 339.89,
+    "viirs_footprint_km2": 1294.2,
+    "viirs_footprint_in_wfigs_km2": 1193.68,
+    "feds_fraction_of_wfigs": 0.958
+  },
+  "points": {
+    "GOES18_FDC": 39434,
+    "VIIRS_NOAA20": 14295,
+    "VIIRS_NOAA21": 14010,
+    "VIIRS_SNPP": 13638
+  },
+  "first_detection_utc": {
+    "GOES18_FDC": "2026-07-16 00:41:19+00:00",
+    "VIIRS_NOAA20": "2026-07-16 10:05:00+00:00",
+    "VIIRS_NOAA21": "2026-07-16 10:51:00+00:00",
+    "VIIRS_SNPP": "2026-07-17 09:27:00+00:00"
+  },
+  "neighbour_fires": [
+    {
+      "poly_IncidentName": "0456",
+      "poly_GISAcres": "25252.8",
+      "attr_FireDiscoveryDateTime": "2026-07-16 02:04:36+00:00"
+    },
+    {
+      "poly_IncidentName": "Deep Canyon",
+      "poly_GISAcres": "9170.290834127205",
+      "attr_FireDiscoveryDateTime": "2026-07-16 19:11:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0426 KAHLER BASIN",
+      "poly_GISAcres": "13.89",
+      "attr_FireDiscoveryDateTime": "2026-07-15 21:46:54+00:00"
+    },
+    {
+      "poly_IncidentName": "Rosenbaum",
+      "poly_GISAcres": "483.0",
+      "attr_FireDiscoveryDateTime": "2026-08-14 02:32:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Grasshopper",
+      "poly_GISAcres": "93971.25018599666",
+      "attr_FireDiscoveryDateTime": "2026-07-24 02:41:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0432",
+      "poly_GISAcres": "2182.787381602848",
+      "attr_FireDiscoveryDateTime": "2026-07-15 23:20:07+00:00"
+    },
+    {
+      "poly_IncidentName": "Henry",
+      "poly_GISAcres": "29843.678656342356",
+      "attr_FireDiscoveryDateTime": "2026-07-16 21:15:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0642",
+      "poly_GISAcres": "4.72317432251875",
+      "attr_FireDiscoveryDateTime": "2026-07-27 00:35:34+00:00"
+    },
+    {
+      "poly_IncidentName": "0480 WILCOX",
+      "poly_GISAcres": "5651.1",
+      "attr_FireDiscoveryDateTime": "2026-07-16 17:47:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Parrish",
+      "poly_GISAcres": "404.1335001216303",
+      "attr_FireDiscoveryDateTime": "2026-07-16 19:46:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0475",
+      "poly_GISAcres": "52.94",
+      "attr_FireDiscoveryDateTime": "2026-07-16 16:02:43+00:00"
+    },
+    {
+      "poly_IncidentName": "Shingle",
+      "poly_GISAcres": "73183.44278264341",
+      "attr_FireDiscoveryDateTime": "2026-07-23 17:59:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0575",
+      "poly_GISAcres": "2.3049562573561313",
+      "attr_FireDiscoveryDateTime": "2026-07-23 03:45:56+00:00"
+    },
+    {
+      "poly_IncidentName": "0458 GREEN RIDGE",
+      "poly_GISAcres": "0.03",
+      "attr_FireDiscoveryDateTime": "2026-07-16 02:08:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0460 HOPKIN",
+      "poly_GISAcres": "11365.819371680913",
+      "attr_FireDiscoveryDateTime": "2026-07-16 02:27:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0407",
+      "poly_GISAcres": "4.0",
+      "attr_FireDiscoveryDateTime": "2026-07-10 03:24:43+00:00"
+    },
+    {
+      "poly_IncidentName": "0735",
+      "poly_GISAcres": "46.54",
+      "attr_FireDiscoveryDateTime": "2026-08-15 18:35:34+00:00"
+    },
+    {
+      "poly_IncidentName": "Watson",
+      "poly_GISAcres": "19.751907840760744",
+      "attr_FireDiscoveryDateTime": "2026-07-23 01:18:04+00:00"
+    },
+    {
+      "poly_IncidentName": "Flat Iron",
+      "poly_GISAcres": "10.36794",
+      "attr_FireDiscoveryDateTime": "2026-07-18 21:39:08+00:00"
+    },
+    {
+      "poly_IncidentName": "Conant",
+      "poly_GISAcres": "107.35670996728834",
+      "attr_FireDiscoveryDateTime": "2026-07-16 20:29:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0384 COYNER",
+      "poly_GISAcres": "20.5",
+      "attr_FireDiscoveryDateTime": "2026-07-05 03:38:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0551 Lone Pine Final",
+      "poly_GISAcres": "24.11",
+      "attr_FireDiscoveryDateTime": "2026-07-23 00:14:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0593 North Crooked",
+      "poly_GISAcres": "31.11",
+      "attr_FireDiscoveryDateTime": "2026-07-23 21:25:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Coyote",
+      "poly_GISAcres": "17459.972752493253",
+      "attr_FireDiscoveryDateTime": "2026-07-16 22:04:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0619 TEETER CREEK",
+      "poly_GISAcres": "0.89",
+      "attr_FireDiscoveryDateTime": "2026-07-24 22:56:46+00:00"
+    },
+    {
+      "poly_IncidentName": "Ten Mile",
+      "poly_GISAcres": "4834.369296918331",
+      "attr_FireDiscoveryDateTime": "2026-07-23 07:18:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0607 IRON",
+      "poly_GISAcres": "2.0",
+      "attr_FireDiscoveryDateTime": "2026-07-24 05:05:21+00:00"
+    },
+    {
+      "poly_IncidentName": "Cherry Creek",
+      "poly_GISAcres": "16.388911092822497",
+      "attr_FireDiscoveryDateTime": "2026-07-16 18:40:09+00:00"
+    },
+    {
+      "poly_IncidentName": "0594",
+      "poly_GISAcres": "297.88439591962776",
+      "attr_FireDiscoveryDateTime": "2026-07-23 21:40:32+00:00"
+    },
+    {
+      "poly_IncidentName": "Camel Hump",
+      "poly_GISAcres": "6788.963577243601",
+      "attr_FireDiscoveryDateTime": "2026-07-16 00:53:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Bench",
+      "poly_GISAcres": "67071.0",
+      "attr_FireDiscoveryDateTime": "2026-07-23 22:06:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0683 MUD SPRINGS",
+      "poly_GISAcres": "85.0",
+      "attr_FireDiscoveryDateTime": "2026-08-06 10:30:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0449 PORCUPINE RIDGE",
+      "poly_GISAcres": "79225.29820796414",
+      "attr_FireDiscoveryDateTime": "2026-07-16 01:07:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Pilot",
+      "poly_GISAcres": "125.8375080237186",
+      "attr_FireDiscoveryDateTime": "2026-07-16 17:14:24+00:00"
+    },
+    {
+      "poly_IncidentName": "0474 RADIO",
+      "poly_GISAcres": "2.13",
+      "attr_FireDiscoveryDateTime": "2026-07-16 14:55:41+00:00"
+    },
+    {
+      "poly_IncidentName": "0462",
+      "poly_GISAcres": "22815.43951208214",
+      "attr_FireDiscoveryDateTime": "2026-07-16 03:11:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0567 LITTLE BUCK",
+      "poly_GISAcres": "43818.36685569011",
+      "attr_FireDiscoveryDateTime": "2026-07-23 01:52:00+00:00"
+    },
+    {
+      "poly_IncidentName": "530",
+      "poly_GISAcres": "5.0",
+      "attr_FireDiscoveryDateTime": "2026-07-21 16:30:31+00:00"
+    },
+    {
+      "poly_IncidentName": "586",
+      "poly_GISAcres": "190.9245",
+      "attr_FireDiscoveryDateTime": "2026-07-23 17:47:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Crooked",
+      "poly_GISAcres": "353.3932243773171",
+      "attr_FireDiscoveryDateTime": "2026-07-16 21:03:48+00:00"
+    },
+    {
+      "poly_IncidentName": "0610",
+      "poly_GISAcres": "16.107271916761377",
+      "attr_FireDiscoveryDateTime": "2026-07-24 14:56:00+00:00"
+    },
+    {
+      "poly_IncidentName": "Round Butte",
+      "poly_GISAcres": "1163.1267251638428",
+      "attr_FireDiscoveryDateTime": "2026-08-01 21:56:00+00:00"
+    },
+    {
+      "poly_IncidentName": "0615",
+      "poly_GISAcres": "108.04335996854587",
+      "attr_FireDiscoveryDateTime": "2026-07-24 20:50:10+00:00"
+    }
+  ]
+}
