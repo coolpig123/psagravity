@@ -2,8 +2,8 @@
 
     python scripts/progress.py
 
-Progress % = sum of estimates of finished steps (+ half of the running step) / sum of estimates.
-Times are in minutes in the JSON.
+Progress % = sum of estimates of finished (✅) steps / sum of all estimates; running steps count 0.
+Elapsed = wall-clock time since `started_utc` (start of this task). Times are in minutes in the JSON.
 """
 from __future__ import annotations
 
@@ -30,8 +30,7 @@ def main():
     elapsed = (now - started).total_seconds() / 60
     steps = s["steps"]
     est_total = sum(st["est"] for st in steps)
-    done_w = sum(st["est"] for st in steps if st["status"] == "done") + \
-        sum(st["est"] / 2 for st in steps if st["status"] == "running")
+    done_w = sum(st["est"] for st in steps if st["status"] == "done")   # running steps count 0
     pct = round(100 * done_w / est_total)
     # remaining: estimates of unfinished steps (running step: its estimate minus time already spent, floor 10 min)
     left = sum(st["est"] for st in steps if st["status"] == "todo") + \

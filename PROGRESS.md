@@ -1,8 +1,8 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [██████░░░░░░░░░░] 38%   elapsed 14m / est. total ~6h29m  → ~6h15m left
-Last update: 2026-11-13 11:28 UTC
+Overall: [███░░░░░░░░░░░░░] 19%   elapsed 17m / est. total ~6h32m  → ~6h15m left
+Last update: 2026-11-13 11:32 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
