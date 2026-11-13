@@ -20,7 +20,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .config import FIRES, FireConfig
+from .config import FIRES, REPO_ROOT, FireConfig
 
 SAT_INDEX = {"VIIRS_SNPP": 0, "VIIRS_NOAA20": 1, "VIIRS_NOAA21": 2}
 
@@ -125,12 +125,19 @@ def build_page_data(F: FireConfig, zoom: int = 12) -> dict:
     if mpath.exists() and mpath.stat().st_size > 5:
         m = pd.read_csv(mpath)
         merged = [{"t": mins(pd.Timestamp(r.FireDiscoveryDateTime)), "xy": xy(r.InitialLongitude, r.InitialLatitude),
-                   "acres": int(r.IncidentSize or 0), "name": str(r.IncidentName)} for r in m.itertuples()]
+                   "acres": int(r.IncidentSize or 0), "name": str(r.IncidentName)} for r in m.itertuples()
+                  if (r.IncidentSize or 0) >= 100]   # tiny merged starts only clutter the map
 
+    if summary.get("growth_end_utc") not in (None, "None", "NaT"):  # pipeline's rule (FEDS / GOES / VIIRS)
+        growth_end = mins(pd.Timestamp(summary["growth_end_utc"]))
     ign_t = mins(pd.Timestamp(summary["wfigs"]["discovery_utc"]))
     run_end = (growth_end if growth_end is not None else max([p[0] for p in viirs] + [ign_t])) + 24 * 60
     start = (ign_t // 60 - 3) * 60
-    nisar_post = [mins(t) for t in F.nisar_passes_utc.get("post", [])]
+    pairs_csv = P / "nisar_pairs.csv"
+    if pairs_csv.exists() and pairs_csv.stat().st_size > 40:
+        nisar_post = sorted(mins(pd.Timestamp(t)) for t in pd.read_csv(pairs_csv).post_utc)
+    else:
+        nisar_post = [mins(t) for t in F.nisar_passes_utc.get("post", [])]
     full_end = max([run_end] + [t + 12 * 60 for t in nisar_post])
     peak_t = goes_series[int(np.argmax([s[1] for s in goes_series]))][0] if goes_series else \
         (passes[int(np.argmax([p[2] for p in passes]))][0] if passes else ign_t + 60)
@@ -157,11 +164,12 @@ def _day_label(T0: pd.Timestamp, a: int, b: int) -> str:
     return f"{da:%b} {da.day}–{db.day}" if da.month == db.month else f"{da:%b} {da.day} – {db:%b} {db.day}"
 
 
-def render_page(F: FireConfig, data: dict) -> str:
+def page_text(F: FireConfig, data: dict) -> dict:
+    """Fire-specific strings shown on the page (footer as escaped HTML)."""
     T0 = pd.Timestamp(data["t0"])
     e = html.escape
     fe = len(data["perims"]) > 0
-    final_pct = round(data["perims"][-1]["acres"] / data["final"]["acres"] * 100) if fe else None
+    final_pct = round(max(p["acres"] for p in data["perims"]) / data["final"]["acres"] * 100) if fe else None
     sources = ["VIIRS 375 m active fire from S-NPP, NOAA-20 and NOAA-21 (NASA FIRMS)."]
     if data["goes"]:
         sources.append(f"{data['goesLabel']} ABI fire detection (NOAA, every 5 min).")
@@ -175,24 +183,30 @@ def render_page(F: FireConfig, data: dict) -> str:
     if data["goes"]:
         notes.append("GOES pixels are large and not terrain-corrected; they give timing, not exact location.")
     notes.append("Detections that could belong to a neighbouring fire are left out.")
-    footer = (f'    <p><strong>Sources.</strong> {e(" ".join(sources))}</p>\n'
-              f'    <p><strong>Reading it.</strong> {e(" ".join(notes))}</p>')
-    rep = {
-        "__TITLE__": e(f"{F.name.split(',')[0]} Spread"),
-        "__NAME__": e(F.name.split(",")[0]),
-        "__SUBTITLE__": e(F.subtitle or F.name),
-        "__RUN_LABEL__": e(f"Main run ({_day_label(T0, *data['ranges']['run'])})"),
-        "__NISAR_LABEL__": e(f"Through NISAR passes ({_day_label(T0, *data['ranges']['nisar'])})"),
-        "__FINAL_LABEL__": e(f"NIFC WFIGS, {data['final']['acres']:,} acres"),
-        "__GOES_LABEL__": e(data["goesLabel"] or "GOES"),
-        "__GOES_STEP__": "5 min",
-        "__TZ__": e(F.tz_name),
-        "__FOOTER__": footer,
+    return {
+        "name": F.name.split(",")[0],
+        "subtitle": F.subtitle or F.name,
+        "runLabel": f"Main run ({_day_label(T0, *data['ranges']['run'])})",
+        "nisarLabel": f"Through NISAR passes ({_day_label(T0, *data['ranges']['nisar'])})",
+        "finalLabel": f"NIFC WFIGS, {data['final']['acres']:,} acres",
+        "footerHtml": (f'<p><strong>Sources.</strong> {e(" ".join(sources))}</p>'
+                       f'<p><strong>Reading it.</strong> {e(" ".join(notes))}</p>'),
     }
-    page = (files("firedata") / "templates" / "fire_page.html").read_text()
-    for k, val in rep.items():
-        page = page.replace(k, val)
-    return page.replace("__DATA__", json.dumps(data, separators=(",", ":")).replace("</", "<\\/"))
+
+
+def _template() -> str:
+    return (files("firedata") / "templates" / "fire_page.html").read_text()
+
+
+def _json(obj) -> str:
+    return json.dumps(obj, separators=(",", ":")).replace("</", "<\\/")
+
+
+def render_page(F: FireConfig, data: dict) -> str:
+    """Single-fire page with the data embedded."""
+    data = {**data, "text": page_text(F, data)}
+    block = f'<script type="application/json" id="fire-data">{_json(data)}</script>'
+    return _template().replace("__TITLE__", html.escape(f"{F.name.split(',')[0]} Spread")).replace("__DATA_BLOCK__", block)
 
 
 def build_page(fire: str, out: Path | None = None) -> Path:
@@ -204,9 +218,35 @@ def build_page(fire: str, out: Path | None = None) -> Path:
     return out
 
 
+def build_app(fires: list[str], out_dir: Path | None = None) -> Path:
+    """Multi-fire site: app/index.html + app/data/<slug>.js (loaded when a fire is selected).
+    Static files only; open index.html directly or serve the folder."""
+    out_dir = Path(out_dir) if out_dir else REPO_ROOT / "app"
+    (out_dir / "data").mkdir(parents=True, exist_ok=True)
+    index = []
+    for slug in fires:
+        F = FIRES[slug]
+        data = build_page_data(F)
+        data["text"] = page_text(F, data)
+        (out_dir / "data" / f"{slug}.js").write_text(
+            f"window.FIRE_DATA = window.FIRE_DATA || {{}};\nwindow.FIRE_DATA[{json.dumps(slug)}] = {_json(data)};\n")
+        index.append({"slug": slug, "label": f"{F.name} · {data['final']['acres']:,} acres"})
+        print(f"  app data: {slug} ({(out_dir / 'data' / f'{slug}.js').stat().st_size / 1024:.0f} KB)")
+    block = f"<script>window.FIRE_INDEX = {_json(index)};</script>"
+    page = _template().replace("__TITLE__", "Fire Spread Explorer").replace("__DATA_BLOCK__", block)
+    (out_dir / "index.html").write_text(page)
+    print(f"  app written to {out_dir / 'index.html'}")
+    return out_dir / "index.html"
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("fire", choices=FIRES)
+    ap.add_argument("fires", nargs="+", choices=FIRES)
+    ap.add_argument("--app", action="store_true", help="build the multi-fire site in app/ instead of one page per fire")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args()
-    build_page(a.fire, a.out)
+    if a.app:
+        build_app(a.fires, a.out)
+    else:
+        for f in a.fires:
+            build_page(f, a.out)

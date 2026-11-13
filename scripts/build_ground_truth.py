@@ -12,7 +12,7 @@ import json
 
 import pandas as pd
 
-from firedata import feds, firms, goes, plots, process, wfigs
+from firedata import feds, firms, goes, nisar, plots, process, wfigs
 from firedata.config import FIRES
 
 
@@ -31,7 +31,6 @@ def main():
     perims = wfigs.download_perimeters_in_bbox(F.bbox, F.start_utc, F.end_utc, raw)
     fire = wfigs.select_fire(perims, F.wfigs_name, F.wfigs_min_acres)
     others = perims.drop(index=fire.index)
-    incident = wfigs.download_incident(F.wfigs_name, F.wfigs_min_acres, raw)
     fire.to_file(proc / "wfigs_final_perimeter.geojson", driver="GeoJSON")
     others.to_file(proc / "wfigs_neighbour_perimeters.geojson", driver="GeoJSON")
     discovery = fire.attr_FireDiscoveryDateTime.iloc[0]
@@ -44,16 +43,25 @@ def main():
     print("FEDS ...")
     feds_ids = feds.find_fire_ids(F.bbox, F.start_utc, F.end_utc)
     feds_ids.to_csv(proc / "feds_fire_ids_in_bbox.csv", index=False)
-    print(feds_ids.to_string(index=False))
-    if F.feds_fireid is not None:
-        fid = F.feds_fireid
-    else:  # FEDS id with the largest overlap with the official perimeter would be safer; use the largest for now
-        fid = feds.find_fire_ids(fire.total_bounds, F.start_utc, F.end_utc).sort_values("max_farea_km2").fireid.iloc[-1]
-    fd = feds.download_feds(fid, raw)
-    perim12 = feds.tidy_perimeters(fd["perimeter"])
-    perim12.to_file(proc / "feds_perimeters_12h.geojson", driver="GeoJSON")
-    perim12.drop(columns="geometry").to_csv(proc / "feds_perimeters_12h.csv", index=False)
-    fd["fireline"].to_file(proc / "feds_fireline_12h.geojson", driver="GeoJSON")
+    sel = feds.select_fire_ids(fire, F.start_utc, F.end_utc)
+    sel.to_csv(proc / "feds_fire_ids_selected.csv", index=False)
+    print(sel.to_string(index=False))
+    keys = ([(F.feds_fireid, "CONUS")] if F.feds_fireid is not None
+            else list(sel[sel.selected][["fireid", "region"]].itertuples(index=False, name=None)))
+    fids = [k[0] for k in keys]
+    per_id, lines = [], []
+    for fid, region in keys:
+        fd = feds.download_feds(fid, raw, region)
+        per_id.append(feds.tidy_perimeters(fd["perimeter"]))
+        lines.append(fd["fireline"])
+    if per_id:
+        perim12 = feds.combine_perimeters(per_id)
+        perim12.to_file(proc / "feds_perimeters_12h.geojson", driver="GeoJSON")
+        perim12.drop(columns="geometry").to_csv(proc / "feds_perimeters_12h.csv", index=False)
+        pd.concat(lines).to_file(proc / "feds_fireline_12h.geojson", driver="GeoJSON")
+    else:
+        print("  ! no FEDS perimeters overlap the official perimeter")
+        perim12 = None
 
     print("VIIRS (FIRMS) ...")
     viirs_all = firms.tidy_viirs(firms.download_viirs(F.bbox, F.start_utc, F.end_utc, raw / "firms"))
@@ -75,6 +83,17 @@ def main():
     frp = process.frp_timeseries(viirs, goes_pts, scans)
     frp.to_csv(proc / "frp_timeseries.csv", index=False)
 
+    growth_end, growth_rule = process.growth_end(perim12, fire, viirs, goes_pts)
+    print("NISAR (ASF) ...")
+    passes = nisar.classify(nisar.search_passes(F.ignition_lon, F.ignition_lat, F.start_utc - pd.Timedelta(days=45),
+                                                F.end_utc + pd.Timedelta(days=45)), discovery, growth_end)
+    passes.to_csv(proc / "nisar_passes.csv", index=False)
+    pairs = nisar.best_pairs(passes)
+    pairs.to_csv(proc / "nisar_pairs.csv", index=False)
+    print(pairs.to_string(index=False))
+    if not pairs.empty:  # figures mark the same-track pairs
+        F.nisar_passes_utc = {"pre": sorted(pairs.pre_utc), "post": sorted(pairs.post_utc)}
+
     summary = {
         "fire": F.name,
         "wfigs": {
@@ -87,11 +106,15 @@ def main():
             "final_acres": float(fire.poly_GISAcres.iloc[0]),
             "perimeter_date_utc": str(fire.poly_PolygonDateTime.iloc[0]),
         },
-        "feds": {"fireid": float(fid), "n_steps": len(perim12),
-                 "max_area_km2": float(perim12.area_km2.max()),
-                 "max_area_acres": float(perim12.area_acres.max()),
-                 "last_growth_step_utc": str(perim12[perim12.is_new].step_utc.max())},
+        "feds": None if perim12 is None else {
+            "fireids": [float(f) for f in fids], "n_steps": len(perim12),
+            "max_area_km2": float(perim12.area_km2.max()),
+            "max_area_acres": float(perim12.area_acres.max()),
+            "last_growth_step_utc": str(perim12[perim12.is_new].step_utc.max())},
         "feds_fire_ids_in_bbox": feds_ids.astype(str).to_dict("records"),
+        "feds_fire_ids_selected": sel.astype(str).to_dict("records"),
+        "growth_end_utc": str(growth_end), "growth_end_rule": growth_rule,
+        "nisar_pairs": pairs.astype(str).to_dict("records"),
         "merged_incidents": merged.astype(str).to_dict("records"),
         "area_comparison": process.area_comparison(fire, perim12, viirs),
         "points": points.groupby("source").size().to_dict(),

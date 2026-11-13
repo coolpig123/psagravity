@@ -81,15 +81,49 @@ def viirs_footprint(viirs: pd.DataFrame) -> gpd.GeoSeries:
     return gpd.GeoSeries([gpd.GeoSeries(boxes).union_all()], crs=EQUAL_AREA)
 
 
+def valid(geom):
+    """Repair invalid polygons (self-intersections in large FEDS / footprint unions) before overlays."""
+    import shapely
+    return geom if geom is None or geom.is_valid else shapely.make_valid(geom)
+
+
 def area_comparison(final: gpd.GeoDataFrame, perims: gpd.GeoDataFrame, viirs: pd.DataFrame) -> dict:
-    w = final.to_crs(EQUAL_AREA).geometry.iloc[0]
-    f = perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()]
-    v = viirs_footprint(viirs).iloc[0]
+    w = valid(final.to_crs(EQUAL_AREA).geometry.iloc[0])
+    v = valid(viirs_footprint(viirs).iloc[0])
     km2 = lambda g: round(g.area / 1e6, 2)
+    if perims is None or not len(perims):
+        return {"wfigs_final_km2": km2(w), "feds_final_km2": None, "viirs_footprint_km2": km2(v),
+                "viirs_footprint_in_wfigs_km2": km2(v.intersection(w))}
+    f = valid(perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()])
     return {"wfigs_final_km2": km2(w), "feds_final_km2": km2(f), "overlap_km2": km2(w.intersection(f)),
             "feds_outside_wfigs_km2": km2(f.difference(w)), "wfigs_not_in_feds_km2": km2(w.difference(f)),
             "viirs_footprint_km2": km2(v), "viirs_footprint_in_wfigs_km2": km2(v.intersection(w)),
             "feds_fraction_of_wfigs": round(f.area / w.area, 3)}
+
+
+def growth_end(perims: gpd.GeoDataFrame | None, final: gpd.GeoDataFrame, viirs: pd.DataFrame,
+               goes: pd.DataFrame | None = None, min_step_acres: float = 250,
+               min_feds_frac: float = 0.25) -> tuple[pd.Timestamp, str]:
+    """When the fire stopped growing, by the first rule that applies:
+
+    1. FEDS covers >= `min_feds_frac` of the official area: last FEDS step adding > `min_step_acres`.
+    2. GOES available: time when 95% of the GOES fire radiative energy (sum of FRP over scans) was
+       released. Late smouldering detections barely move this, unlike detection counts.
+    3. Otherwise: time by which 95% of the VIIRS detections had occurred.
+    """
+    final_acres = final.to_crs(EQUAL_AREA).area.sum() / 4046.86
+    if perims is not None and len(perims) and perims.area_acres.max() >= min_feds_frac * final_acres:
+        p = perims[perims.is_new].sort_values("obs_time_utc")
+        grew = p[p.area_acres.diff().fillna(p.area_acres) > min_step_acres]
+        return grew.obs_time_utc.max(), f"last FEDS step adding > {min_step_acres:.0f} acres"
+    if goes is not None and len(goes):
+        g = goes[goes.in_frp_total & ~goes.get("ambiguous", False)]
+        fre = g.groupby("time_utc").frp_mw.sum().sort_index().cumsum()
+        if len(fre) and fre.iloc[-1] > 0:
+            return fre.index[(fre >= 0.95 * fre.iloc[-1]).argmax()], \
+                "95% of GOES fire radiative energy released (FEDS too small)"
+    t = viirs.time_utc.sort_values()
+    return t.iloc[int(0.95 * (len(t) - 1))], "95% of VIIRS detections reached (FEDS too small, no GOES)"
 
 
 def latest_perimeter_at(perims: gpd.GeoDataFrame, when: pd.Timestamp) -> pd.Series | None:

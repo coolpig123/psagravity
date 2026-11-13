@@ -1,0 +1,123 @@
+{
+  "fire": "Colwash Fire, WA",
+  "wfigs": {
+    "unique_fire_id": "2026-WAYAA-000090",
+    "discovery_utc": "2026-08-22 14:58:43+00:00",
+    "origin_lat": 46.213617,
+    "origin_lon": -120.120392,
+    "containment_utc": "2026-08-23 12:53:00+00:00",
+    "fire_out_utc": "2026-08-28 15:33:00+00:00",
+    "final_acres": 39102.90278649851,
+    "perimeter_date_utc": "2026-08-23 00:20:55+00:00"
+  },
+  "feds": {
+    "fireids": [
+      73983.0
+    ],
+    "n_steps": 11,
+    "max_area_km2": 6.069166461758642,
+    "max_area_acres": 1499.7213785328693,
+    "last_growth_step_utc": "2026-08-23 12:00:00+00:00"
+  },
+  "feds_fire_ids_in_bbox": [
+    {
+      "fireid": "12536.0",
+      "n": "11",
+      "t_first": "2026-08-23T00:00:00",
+      "t_last": "2026-08-23T12:00:00",
+      "max_farea_km2": "4.0132158620994645"
+    },
+    {
+      "fireid": "73983.0",
+      "n": "11",
+      "t_first": "2026-08-23T00:00:00",
+      "t_last": "2026-08-23T12:00:00",
+      "max_farea_km2": "6.054085461672534"
+    }
+  ],
+  "feds_fire_ids_selected": [
+    {
+      "fireid": "73983.0",
+      "region": "CONUS",
+      "n_steps": "11",
+      "max_area_km2": "6.07",
+      "overlap_km2": "4.67",
+      "frac_inside": "0.769",
+      "selected": "True",
+      "reason": "inside official perimeter"
+    },
+    {
+      "fireid": "12536.0",
+      "region": "BorealNA",
+      "n_steps": "11",
+      "max_area_km2": "4.02",
+      "overlap_km2": "3.72",
+      "frac_inside": "0.925",
+      "selected": "False",
+      "reason": "duplicate of CONUS 73983"
+    }
+  ],
+  "growth_end_utc": "2026-08-23 04:26:17+00:00",
+  "growth_end_rule": "95% of GOES fire radiative energy released (FEDS too small)",
+  "nisar_pairs": [
+    {
+      "track_id": "A106",
+      "pre_utc": "2026-08-20 13:03:27+00:00",
+      "post_utc": "2026-09-01 13:03:26+00:00",
+      "gap_days": "12.0"
+    },
+    {
+      "track_id": "A5",
+      "pre_utc": "2026-08-13 12:55:07+00:00",
+      "post_utc": "2026-08-25 12:55:07+00:00",
+      "gap_days": "12.0"
+    },
+    {
+      "track_id": "D71",
+      "pre_utc": "2026-08-18 03:10:28+00:00",
+      "post_utc": "2026-08-30 03:10:28+00:00",
+      "gap_days": "12.0"
+    },
+    {
+      "track_id": "D143",
+      "pre_utc": "2026-08-11 03:02:09+00:00",
+      "post_utc": "2026-09-04 03:02:08+00:00",
+      "gap_days": "24.0"
+    }
+  ],
+  "merged_incidents": [],
+  "area_comparison": {
+    "wfigs_final_km2": 158.24,
+    "feds_final_km2": 6.07,
+    "overlap_km2": 4.67,
+    "feds_outside_wfigs_km2": 1.4,
+    "wfigs_not_in_feds_km2": 153.57,
+    "viirs_footprint_km2": 12.39,
+    "viirs_footprint_in_wfigs_km2": 9.8,
+    "feds_fraction_of_wfigs": 0.038
+  },
+  "points": {
+    "GOES18_FDC": 1121,
+    "VIIRS_NOAA20": 36,
+    "VIIRS_NOAA21": 47,
+    "VIIRS_SNPP": 35
+  },
+  "first_detection_utc": {
+    "GOES18_FDC": "2026-08-22 15:46:17+00:00",
+    "VIIRS_NOAA20": "2026-08-22 21:38:00+00:00",
+    "VIIRS_NOAA21": "2026-08-23 08:58:00+00:00",
+    "VIIRS_SNPP": "2026-08-23 09:34:00+00:00"
+  },
+  "neighbour_fires": [
+    {
+      "poly_IncidentName": "Progressive & Higgins",
+      "poly_GISAcres": "41.46",
+      "attr_FireDiscoveryDateTime": "2026-08-17 22:55:21+00:00"
+    },
+    {
+      "poly_IncidentName": "Mile Post 53",
+      "poly_GISAcres": "0.47",
+      "attr_FireDiscoveryDateTime": "2026-08-15 18:04:43+00:00"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+fireid,region,n_steps,max_area_km2,overlap_km2,frac_inside,selected,reason
+9744.0,BorealNA,86,1402.89,1117.18,0.796,False,duplicate of CONUS 63374
+63374.0,CONUS,80,1376.66,1100.71,0.8,True,inside official perimeter
+63559.0,CONUS,14,12.85,0.0,0.0,False,< 20% inside
+9767.0,BorealNA,14,11.21,0.0,0.0,False,< 20% inside
