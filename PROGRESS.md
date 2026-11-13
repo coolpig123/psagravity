@@ -1,8 +1,8 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [█████████░░░░░░░] 56%   elapsed 1h08m / est. total ~3h53m  → ~2h45m left
-Last update: 2026-11-13 12:22 UTC
+Overall: [████████████████] 100%   elapsed 1h10m / est. total ~1h10m  → ~0m left
+Last update: 2026-11-13 12:24 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
@@ -11,9 +11,9 @@ Last update: 2026-11-13 12:22 UTC
 | 2 | Crosswhite (OR) | ✅ | 1h30m | 1h05m |
 | 3 | Colwash (WA) | ✅ | 45m | 25m |
 | 4 | Biscar (CA) | ✅ | 45m | 25m |
-| 5 | Summary file + accuracy % | 🔄 | 1h00m | 15m |
-| 6 | Multi-fire website (tested in a browser) | 🔄 | 1h30m | 20m |
-| 7 | Short README (Hebrew) | 🔄 | 1h00m | 10m |
+| 5 | Summary file + accuracy % | ✅ | 1h00m | 25m |
+| 6 | Multi-fire website (tested in a browser) | ✅ | 1h30m | 35m |
+| 7 | Short README (Hebrew) | ✅ | 1h00m | 20m |
 
 ## Done so far
 
@@ -26,6 +26,9 @@ Last update: 2026-11-13 12:22 UTC
 - Multi-fire site in `app/` (fire picker, on-demand data, works from file://). Browser test `scripts/test_app.py` passes for all 3 fires at desktop and phone width. Crosswhite to be added.
 - Root README: short Hebrew overview added at the top (what, data and why, status, numbers per fire, how to run, where things live). Crosswhite numbers pending.
 - Crosswhite (OR): done. FEDS (CONUS 63374) reaches 96% of the official area (IoU 64%); VIIRS covers 83%, GOES 96%; GOES saw the start 11 min before official discovery. 4 NISAR same-track pairs (36-day gaps). README + interactive page (3.7 MB).
+- Summary complete for all 4 fires (`docs/fires_summary.md`, `docs/fires_summary.csv`, 52 rows) with metric definitions and N/A reasons.
+- Site `app/index.html` with all 4 fires; `scripts/test_app.py` passes (no JS errors, map draws, Play and timeline work, no overflow) at desktop and phone width.
+- Root README: Hebrew overview with the numbers for all 4 fires. CLAUDE.md updated.
 
 ## Problems / data mismatches
 
