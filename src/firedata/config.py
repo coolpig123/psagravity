@@ -116,6 +116,11 @@ COLWASH = FireConfig(
     notes=[
         "The official perimeter is dated 2026-08-23 00:20 UTC, 9.4 h after discovery, and was not updated later. "
         "Containment was 2026-08-23 12:53 UTC.",
+        "The WFIGS point of origin (46.213617, -120.120392) lies ~1.4 km north of the final perimeter.",
+        "The run happened mostly between VIIRS overpasses: VIIRS footprints cover only ~6% of the official area and the "
+        "first VIIRS detection came 6.6 h after discovery. GOES saw it 48 min after discovery; GOES fire power peaked "
+        "near 15 GW around 2026-08-23 01:00 UTC and 95% of the GOES fire energy was released by 2026-08-23 04:26 UTC.",
+        "FEDS is almost empty for this fire (2 perimeters, 6 km², IoU 3%): its 12 h steps are too slow for a run of a few hours.",
     ],
 )
 

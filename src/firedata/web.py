@@ -127,6 +127,8 @@ def build_page_data(F: FireConfig, zoom: int = 12) -> dict:
         merged = [{"t": mins(pd.Timestamp(r.FireDiscoveryDateTime)), "xy": xy(r.InitialLongitude, r.InitialLatitude),
                    "acres": int(r.IncidentSize or 0), "name": str(r.IncidentName)} for r in m.itertuples()]
 
+    if summary.get("growth_end_utc") not in (None, "None", "NaT"):  # pipeline's rule (FEDS / GOES / VIIRS)
+        growth_end = mins(pd.Timestamp(summary["growth_end_utc"]))
     ign_t = mins(pd.Timestamp(summary["wfigs"]["discovery_utc"]))
     run_end = (growth_end if growth_end is not None else max([p[0] for p in viirs] + [ign_t])) + 24 * 60
     start = (ign_t // 60 - 3) * 60
