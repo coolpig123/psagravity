@@ -1,0 +1,3 @@
+fireid,region,n_steps,max_area_km2,overlap_km2,frac_inside,selected,reason
+73983.0,CONUS,11,6.07,4.67,0.769,True,inside official perimeter
+12536.0,BorealNA,11,4.02,3.72,0.925,False,duplicate of CONUS 73983

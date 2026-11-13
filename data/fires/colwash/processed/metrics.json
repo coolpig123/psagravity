@@ -1,0 +1,63 @@
+{
+  "fire": "Colwash Fire, WA",
+  "official_area_km2": 158.2,
+  "official_acres": 39103,
+  "items": {
+    "FEDS": {
+      "source": "NASA FEDS VIIRS modeled fire perimeters (VEDA OGC API, *_nrt)",
+      "time_range": "2026-08-23 09:30 to 2026-08-23 20:30 UTC",
+      "resolution": "polygons from 375 m VIIRS pixels",
+      "update_rate": "12 h",
+      "coverage": "2 perimeters with new data (11 steps); fire id(s) 73983",
+      "metrics": {
+        "feds_iou": 2.9,
+        "feds_area_ratio": 3.8
+      }
+    },
+    "VIIRS": {
+      "source": "VIIRS 375 m active fire, S-NPP + NOAA-20 + NOAA-21 (NASA FIRMS, VIIRS_NOAA20_NRT, VIIRS_NOAA21_NRT, VIIRS_SNPP_NRT)",
+      "time_range": "2026-08-22 21:38 to 2026-08-24 11:13 UTC",
+      "resolution": "375 m (pixel grows to ~0.8 km at scan edge)",
+      "update_rate": "~6 overpasses/day (3 satellites × day/night)",
+      "coverage": "118 detections",
+      "metrics": {
+        "viirs_cover": 6.2,
+        "viirs_inside": 79.1,
+        "ignition_error_min": 399,
+        "ignition_dist_km": 7.11
+      }
+    },
+    "GOES": {
+      "source": "GOES-18 ABI L2 FDC, CONUS sector (NOAA, AWS)",
+      "time_range": "2026-08-22 15:46 to 2026-08-25 21:16 UTC",
+      "resolution": "2 km nominal; ~8.1 km² per pixel here",
+      "update_rate": "5 min",
+      "coverage": "1,121 fire pixels in 2,302 scans",
+      "metrics": {
+        "goes_cover": 100.0,
+        "goes_inside": 36.1,
+        "ignition_error_min": 48,
+        "ignition_dist_km": 7.03
+      }
+    },
+    "Final perimeter": {
+      "source": "NIFC WFIGS interagency perimeter (2026-WAYAA-000090)",
+      "time_range": "perimeter dated 2026-08-23 00:20 UTC",
+      "resolution": "mapped polygon (Mixed Methods)",
+      "update_rate": "final only (no history)",
+      "coverage": "39,103 acres (158.2 km²)",
+      "metrics": {},
+      "reference": true
+    },
+    "NISAR GCOV": {
+      "source": "NISAR L2 GCOV (ASF), standard production",
+      "time_range": "A106: 08-20 → 09-01; A5: 08-13 → 08-25; D71: 08-18 → 08-30; D143: 08-11 → 09-04",
+      "resolution": "L-band HH/HV, geocoded grid",
+      "update_rate": "12-day repeat per track; several tracks",
+      "coverage": "27 passes, 4 same-track pre/post pairs (shortest gap 12 days)",
+      "metrics": {},
+      "na": "burn-scar agreement not computed yet (issue #7)"
+    }
+  },
+  "all_cover": 100.0
+}
