@@ -1,0 +1,2 @@
+# Only needed for the browser test (scripts/test_app.py)
+playwright==1.65.1
