@@ -11,7 +11,9 @@
     "perimeter_date_utc": "2026-10-01 18:38:50.756000+00:00"
   },
   "feds": {
-    "fireid": 69872.0,
+    "fireids": [
+      69872.0
+    ],
     "n_steps": 22,
     "max_area_km2": 143.49940876352596,
     "max_area_acres": 35459.421402511085,
@@ -38,6 +40,38 @@
       "t_first": "2026-08-22T12:00:00",
       "t_last": "2026-08-27T00:00:00",
       "max_farea_km2": "45.407517213633476"
+    }
+  ],
+  "feds_fire_ids_selected": [
+    {
+      "fireid": "69872.0",
+      "n_steps": "22",
+      "max_area_km2": "143.5",
+      "overlap_km2": "128.95",
+      "frac_inside": "0.899",
+      "selected": "True"
+    }
+  ],
+  "growth_end_utc": "2026-08-13 09:30:00+00:00",
+  "growth_end_rule": "last FEDS step adding > 250 acres",
+  "nisar_pairs": [
+    {
+      "track_id": "A106",
+      "pre_utc": "2026-07-27 13:01:46+00:00",
+      "post_utc": "2026-08-20 13:01:45+00:00",
+      "gap_days": "24.0"
+    },
+    {
+      "track_id": "A34",
+      "pre_utc": "2026-07-22 13:09:32+00:00",
+      "post_utc": "2026-08-15 13:09:30+00:00",
+      "gap_days": "24.0"
+    },
+    {
+      "track_id": "D42",
+      "pre_utc": "2026-07-23 02:55:30+00:00",
+      "post_utc": "2026-08-16 02:55:29+00:00",
+      "gap_days": "24.0"
     }
   ],
   "merged_incidents": [
