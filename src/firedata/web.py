@@ -130,7 +130,11 @@ def build_page_data(F: FireConfig, zoom: int = 12) -> dict:
     ign_t = mins(pd.Timestamp(summary["wfigs"]["discovery_utc"]))
     run_end = (growth_end if growth_end is not None else max([p[0] for p in viirs] + [ign_t])) + 24 * 60
     start = (ign_t // 60 - 3) * 60
-    nisar_post = [mins(t) for t in F.nisar_passes_utc.get("post", [])]
+    pairs_csv = P / "nisar_pairs.csv"
+    if pairs_csv.exists() and pairs_csv.stat().st_size > 40:
+        nisar_post = sorted(mins(pd.Timestamp(t)) for t in pd.read_csv(pairs_csv).post_utc)
+    else:
+        nisar_post = [mins(t) for t in F.nisar_passes_utc.get("post", [])]
     full_end = max([run_end] + [t + 12 * 60 for t in nisar_post])
     peak_t = goes_series[int(np.argmax([s[1] for s in goes_series]))][0] if goes_series else \
         (passes[int(np.argmax([p[2] for p in passes]))][0] if passes else ign_t + 60)

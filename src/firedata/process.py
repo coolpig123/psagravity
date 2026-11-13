@@ -83,13 +83,33 @@ def viirs_footprint(viirs: pd.DataFrame) -> gpd.GeoSeries:
 
 def area_comparison(final: gpd.GeoDataFrame, perims: gpd.GeoDataFrame, viirs: pd.DataFrame) -> dict:
     w = final.to_crs(EQUAL_AREA).geometry.iloc[0]
-    f = perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()]
     v = viirs_footprint(viirs).iloc[0]
     km2 = lambda g: round(g.area / 1e6, 2)
+    if perims is None or not len(perims):
+        return {"wfigs_final_km2": km2(w), "feds_final_km2": None, "viirs_footprint_km2": km2(v),
+                "viirs_footprint_in_wfigs_km2": km2(v.intersection(w))}
+    f = perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()]
     return {"wfigs_final_km2": km2(w), "feds_final_km2": km2(f), "overlap_km2": km2(w.intersection(f)),
             "feds_outside_wfigs_km2": km2(f.difference(w)), "wfigs_not_in_feds_km2": km2(w.difference(f)),
             "viirs_footprint_km2": km2(v), "viirs_footprint_in_wfigs_km2": km2(v.intersection(w)),
             "feds_fraction_of_wfigs": round(f.area / w.area, 3)}
+
+
+def growth_end(perims: gpd.GeoDataFrame | None, final: gpd.GeoDataFrame, viirs: pd.DataFrame,
+               min_step_acres: float = 250, min_feds_frac: float = 0.25) -> tuple[pd.Timestamp, str]:
+    """When the fire stopped growing.
+
+    If FEDS covers at least `min_feds_frac` of the official area: the last FEDS step that
+    added more than `min_step_acres`. Otherwise (FEDS missing or far too small): the time by
+    which 95% of the fire's VIIRS detections had occurred.
+    """
+    final_acres = final.to_crs(EQUAL_AREA).area.sum() / 4046.86
+    if perims is not None and len(perims) and perims.area_acres.max() >= min_feds_frac * final_acres:
+        p = perims[perims.is_new].sort_values("obs_time_utc")
+        grew = p[p.area_acres.diff().fillna(p.area_acres) > min_step_acres]
+        return grew.obs_time_utc.max(), f"last FEDS step adding > {min_step_acres:.0f} acres"
+    t = viirs.time_utc.sort_values()
+    return t.iloc[int(0.95 * (len(t) - 1))], "95% of VIIRS detections reached (FEDS too small or missing)"
 
 
 def latest_perimeter_at(perims: gpd.GeoDataFrame, when: pd.Timestamp) -> pd.Series | None:
