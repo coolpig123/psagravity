@@ -9,6 +9,7 @@ matching GOES pixels to a fire.
 """
 from __future__ import annotations
 
+import io
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -115,7 +116,8 @@ class _Subsetter:
 
 def _read_one(fs, path, sub: _Subsetter) -> tuple[pd.Timestamp, pd.DataFrame]:
     t = _scan_start(path)
-    with fs.open(path, "rb") as fh, h5py.File(fh, "r") as f:
+    data = fs.cat_file(path)  # one GET per file; h5py on a remote file handle is much slower
+    with h5py.File(io.BytesIO(data), "r") as f:
         return t, sub.extract(f, t)
 
 
