@@ -14,6 +14,18 @@ Official area 93,733 acres (379.3 km²). FEDS ∪ VIIRS ∪ GOES cover 96.6% of 
 | Final perimeter | NIFC WFIGS interagency perimeter (2026-NVCCD-030683) | perimeter dated 2026-10-01 18:38 UTC | mapped polygon (Mixed Methods) | final only (no history) | 93,733 acres (379.3 km²) | reference (100%) |
 | NISAR GCOV | NISAR L2 GCOV (ASF), standard production | A106: 07-27 → 08-20; A34: 07-22 → 08-15; D42: 07-23 → 08-16 | L-band HH/HV, geocoded grid | 12-day repeat per track; several tracks | 24 passes, 3 same-track pre/post pairs (shortest gap 24 days) | N/A: burn-scar agreement not computed yet (issue #7) |
 
+## Crosswhite Fire, OR
+
+Official area 355,065 acres (1441.1 km²). FEDS ∪ VIIRS ∪ GOES cover 98.6% of it. Details: `data/fires/crosswhite/README.md`.
+
+| Item | Source | Time range | Resolution | Update rate | Coverage | Agreement vs official |
+|---|---|---|---|---|---|---|
+| FEDS | NASA FEDS VIIRS modeled fire perimeters (VEDA OGC API, *_nrt) | 2026-07-16 09:30 to 2026-08-26 09:30 UTC | polygons from 375 m VIIRS pixels | 12 h | 65 perimeters with new data (92 steps); fire id(s) 63374 | IoU 64.1%<br>area ratio 95.5% |
+| VIIRS | VIIRS 375 m active fire, S-NPP + NOAA-20 + NOAA-21 (NASA FIRMS, VIIRS_NOAA20_NRT, VIIRS_NOAA20_SP, VIIRS_NOAA21_NRT, VIIRS_NOAA21_SP, VIIRS_SNPP_NRT, VIIRS_SNPP_SP) | 2026-07-16 10:05 to 2026-08-23 10:38 UTC | 375 m (pixel grows to ~0.8 km at scan edge) | ~6 overpasses/day (3 satellites × day/night) | 41,937 detections | covers 83.1%<br>inside 92.5%<br>first detection +9h13m<br>61.23 km from origin |
+| GOES | GOES-18 ABI L2 FDC, CONUS sector (NOAA, AWS) | 2026-07-16 00:41 to 2026-08-19 20:21 UTC | 2 km nominal; ~7.7 km² per pixel here | 5 min | 39,336 fire pixels in 10,363 scans | covers 96.3%<br>inside 71.6%<br>first detection −11 min<br>3.16 km from origin |
+| Final perimeter | NIFC WFIGS interagency perimeter (2026-ORPRD-000445) | perimeter dated 2026-08-16 05:53 UTC | mapped polygon (Mixed Methods) | final only (no history) | 355,065 acres (1,441.1 km²) | reference (100%) |
+| NISAR GCOV | NISAR L2 GCOV (ASF), standard production | A106: 07-15 → 08-20; A5: 07-08 → 08-13; D71: 07-13 → 08-18; D143: 07-06 → 08-23 | L-band HH/HV, geocoded grid | 12-day repeat per track; several tracks | 32 passes, 4 same-track pre/post pairs (shortest gap 36 days) | N/A: burn-scar agreement not computed yet (issue #7) |
+
 ## Colwash Fire, WA
 
 Official area 39,103 acres (158.2 km²). FEDS ∪ VIIRS ∪ GOES cover 100.0% of it. Details: `data/fires/colwash/README.md`.
@@ -37,10 +49,6 @@ Official area 69,352 acres (280.7 km²). FEDS ∪ VIIRS ∪ GOES cover 94.1% of 
 | GOES | GOES-18 ABI L2 FDC, CONUS sector (NOAA, AWS) | 2026-07-18 20:06 to 2026-08-11 19:51 UTC | 2 km nominal; ~7.0 km² per pixel here | 5 min | 1,489 fire pixels in 7,195 scans | covers 90.6%<br>inside 62.9%<br>first detection +2h00m<br>10.35 km from origin |
 | Final perimeter | NIFC WFIGS interagency perimeter (2026-CANOD-004474) | perimeter dated 2026-07-24 04:36 UTC | mapped polygon (Mixed Methods) | final only (no history) | 69,352 acres (280.7 km²) | reference (100%) |
 | NISAR GCOV | NISAR L2 GCOV (ASF), standard production | A106: 07-15 → 07-27; A34: 07-10 → 07-22; D42: 07-11 → 07-23; D143: 07-18 → 08-11 | L-band HH/HV, geocoded grid | 12-day repeat per track; several tracks | 34 passes, 4 same-track pre/post pairs (shortest gap 12 days) | N/A: burn-scar agreement not computed yet (issue #7) |
-
-## Crosswhite Fire, OR
-
-**In progress**: data download / processing not finished yet. This table will be filled in when the pipeline run completes.
 
 ## Metric definitions
 
