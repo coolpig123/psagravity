@@ -1,0 +1,453 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: incident-display night map. Header with the clock, map + side readouts, full-width
+   timeline scrubber underneath. Single dark theme by choice: hot spots read as light on dark. */
+:root {
+  color-scheme: dark;
+  --ground: #12100e;      /* page, warm near-black */
+  --panel: #1b1815;       /* map frame, panels */
+  --line: #332d27;        /* hairlines */
+  --ink: #eee8df;         /* primary text */
+  --ink-2: #b0a698;       /* secondary text */
+  --muted: #776e63;       /* axis labels */
+  --ember: #ff7a2f;       /* accent: active fire */
+  --hot: #ffe08a;         /* newest detections */
+  --char: #9b3a17;        /* burned / old detections */
+  --perim: #86b8ff;       /* FEDS perimeter */
+  --nisar: #b9a6ff;       /* NISAR passes */
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+html, body { background: var(--ground); color: var(--ink); }
+body {
+  font: 14px/1.5 var(--body);
+  padding-block: 20px 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px 32px; }
+.title h1 { font: 600 40px/1 var(--display); letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.title p { margin: 6px 0 0; color: var(--ink-2); }
+.clock { text-align: right; font-variant-numeric: tabular-nums; }
+.clock .utc { font: 600 40px/1 var(--display); letter-spacing: 0.02em; }
+.clock .utc span { color: var(--muted); font-weight: 500; }
+.clock .sub { font: 400 13px/1.4 var(--mono); color: var(--ink-2); margin-top: 6px; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 16px; align-items: start; }
+@media (max-width: 880px) { .stage { grid-template-columns: minmax(0, 1fr); } .clock { text-align: left; } }
+
+.mapbox { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-inline: auto; width: 100%; }
+#map { display: block; width: 100%; height: auto; cursor: crosshair; }
+.tip { position: absolute; pointer-events: none; background: rgba(18, 16, 14, 0.94); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 12px/1.45 var(--mono); color: var(--ink); white-space: nowrap; z-index: 2; }
+.tip b { color: var(--hot); font-weight: 500; }
+.maplabel { position: absolute; left: 10px; top: 8px; font: 500 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); background: rgba(18,16,14,.7); padding: 5px 7px; border-radius: 3px; }
+
+.side { display: flex; flex-direction: column; gap: 14px; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.stat { background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat .k { font: 500 10.5px/1.3 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font: 600 26px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.stat .v small { font: 500 14px var(--display); color: var(--ink-2); margin-left: 2px; }
+.stat .n { font: 400 11.5px/1.35 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.stat.wide { grid-column: 1 / -1; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.panel h2 { font: 500 10.5px/1.3 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.layer { display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--ink); user-select: none; }
+.layer input { accent-color: var(--ember); width: 15px; height: 15px; margin: 0; }
+.layer .sw { width: 22px; height: 14px; flex: none; display: grid; place-items: center; }
+.layer .lbl { display: flex; flex-direction: column; line-height: 1.3; }
+.layer .lbl em { font-style: normal; font: 11.5px var(--mono); color: var(--ink-2); }
+.dot-new { width: 9px; height: 9px; border-radius: 50%; background: radial-gradient(circle, var(--hot) 0 35%, var(--ember) 70%); box-shadow: 0 0 6px var(--ember); }
+.dot-old { width: 5px; height: 5px; border-radius: 50%; background: var(--char); }
+.sq-goes { width: 12px; height: 12px; background: rgba(255,122,47,.45); border: 1px solid var(--ember); }
+.ln-feds { width: 20px; height: 10px; border: 1.5px solid var(--perim); background: rgba(134,184,255,.14); border-radius: 2px; }
+.ln-final { width: 20px; height: 0; border-top: 1.5px dashed var(--ink); }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+button.play { display: inline-flex; align-items: center; gap: 8px; background: var(--ember); color: #1a0d05; border: 0; border-radius: 4px; padding: 8px 14px; font: 600 15px/1 var(--display); letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+button.play:hover { filter: brightness(1.08); }
+button.play svg { width: 12px; height: 12px; fill: currentColor; }
+.field { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12.5px; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 13px var(--body); }
+@media (max-width: 600px), (pointer: coarse) { .hint { display: none; } }
+.hint { margin-left: auto; font: 11.5px var(--mono); color: var(--muted); }
+:focus-visible { outline: 2px solid var(--hot); outline-offset: 2px; }
+
+.timeline { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 0 2px; }
+#tl { display: block; width: 100%; height: 150px; cursor: ew-resize; touch-action: none; }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 4px 12px 8px; font: 11.5px var(--mono); color: var(--ink-2); }
+.tl-legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+
+footer { color: var(--ink-2); font-size: 12.5px; display: grid; gap: 6px; max-width: 75ch; }
+footer p { margin: 0; }
+footer strong { color: var(--ink); font-weight: 500; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="title">
+      <h1>__NAME__</h1>
+      <p>__SUBTITLE__</p>
+    </div>
+    <div class="clock" aria-live="polite">
+      <div class="utc" id="clock">—</div>
+      <div class="sub" id="clock-sub">&nbsp;</div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <button class="play" id="play" type="button" aria-label="Play">
+      <svg viewBox="0 0 12 12" id="play-icon"><path d="M2 1l9 5-9 5z"/></svg><span id="play-label">Play</span>
+    </button>
+    <label class="field" for="speed">Speed
+      <select id="speed">
+        <option value="1">1 h per second</option>
+        <option value="3" selected>3 h per second</option>
+        <option value="8">8 h per second</option>
+      </select>
+    </label>
+    <label class="field" for="trail">Highlight detections from the last
+      <select id="trail">
+        <option value="3">3 h</option>
+        <option value="12" selected>12 h</option>
+        <option value="24">24 h</option>
+      </select>
+    </label>
+    <label class="field" for="range">Timeline
+      <select id="range">
+        <option value="run" selected>__RUN_LABEL__</option>
+        <option value="nisar">__NISAR_LABEL__</option>
+      </select>
+    </label>
+    <span class="hint">Space: play · ← →: 1 h · Shift: 12 h</span>
+  </div>
+
+  <div class="stage">
+    <div class="mapbox" id="mapbox">
+      <canvas id="map" aria-label="Map of fire detections and perimeters at the selected time"></canvas>
+      <div class="maplabel">Shaded relief · north up</div>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+
+    <aside class="side">
+      <div class="stats">
+        <div class="stat wide" id="stat-area">
+          <span class="k">Mapped perimeter (FEDS)</span>
+          <span class="v" id="s-area">0<small>acres</small></span>
+          <span class="n" id="s-area-n">no perimeter yet</span>
+        </div>
+        <div class="stat" id="stat-frp">
+          <span class="k">GOES FRP now</span>
+          <span class="v" id="s-frp">0<small>MW</small></span>
+          <span class="n" id="s-frp-n">scan —</span>
+        </div>
+        <div class="stat">
+          <span class="k">VIIRS points</span>
+          <span class="v" id="s-viirs">0</span>
+          <span class="n" id="s-viirs-n">last 12 h</span>
+        </div>
+      </div>
+
+      <div class="panel" role="group" aria-labelledby="layers-h">
+        <h2 id="layers-h">Layers</h2>
+        <label class="layer" for="l-viirs"><input type="checkbox" id="l-viirs" checked>
+          <span class="sw"><span class="dot-new"></span></span>
+          <span class="lbl">VIIRS 375 m detections<em>bright = recent, size = FRP</em></span></label>
+        <label class="layer" for="l-burn"><input type="checkbox" id="l-burn" checked>
+          <span class="sw"><span class="dot-old"></span></span>
+          <span class="lbl">Earlier detections<em>where fire has already been</em></span></label>
+        <label class="layer" id="row-goes" for="l-goes"><input type="checkbox" id="l-goes" checked>
+          <span class="sw"><span class="sq-goes"></span></span>
+          <span class="lbl">__GOES_LABEL__ fire pixels<em>last 20 min</em></span></label>
+        <label class="layer" id="row-feds" for="l-feds"><input type="checkbox" id="l-feds" checked>
+          <span class="sw"><span class="ln-feds"></span></span>
+          <span class="lbl">FEDS perimeter<em>latest 12 h step, lower bound</em></span></label>
+        <label class="layer" for="l-final"><input type="checkbox" id="l-final" checked>
+          <span class="sw"><span class="ln-final"></span></span>
+          <span class="lbl">Official final perimeter<em>__FINAL_LABEL__</em></span></label>
+      </div>
+    </aside>
+  </div>
+
+  <div class="timeline">
+    <canvas id="tl" tabindex="0" role="slider" aria-label="Time" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></canvas>
+    <div class="tl-legend">
+      <span id="tl-goes"><i style="width:14px;height:8px;background:rgba(255,122,47,.45);border-top:1.5px solid var(--ember)"></i>__GOES_LABEL__ total FRP (__GOES_STEP__)</span>
+      <span><i style="width:7px;height:7px;border-radius:50%;background:var(--hot)"></i>VIIRS overpass</span>
+      <span id="tl-feds"><i style="width:7px;height:7px;background:var(--perim);transform:rotate(45deg)"></i>FEDS perimeter</span>
+      <span><i style="width:0;height:12px;border-left:1.5px dashed var(--nisar)"></i>NISAR pass</span>
+      <span><i style="width:14px;height:10px;background:#0c0a09;border:1px solid var(--line)"></i>night (20:00–06:00 __TZ__)</span>
+    </div>
+  </div>
+
+  <footer>
+__FOOTER__
+  </footer>
+</div>
+
+<script type="application/json" id="fire-data">__DATA__</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById("fire-data").textContent);
+  const T0 = Date.parse(D.t0);
+  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const SAT = ["S-NPP", "NOAA-20", "NOAA-21"];
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = { ground: css("--ground"), panel: css("--panel"), line: css("--line"), ink: css("--ink"), ink2: css("--ink-2"),
+              muted: css("--muted"), ember: css("--ember"), hot: css("--hot"), char: css("--char"), perim: css("--perim"), nisar: css("--nisar") };
+  const RANGES = D.ranges;
+
+  const viirs = D.viirs.slice().sort((a, b) => a[0] - b[0]);
+  const viirsT = viirs.map(p => p[0]);
+  const goes = D.goes.slice().sort((a, b) => a[0] - b[0]);
+  const goesT = goes.map(p => p[0]);
+  const series = D.goesSeries;
+  const seriesT = series.map(p => p[0]);
+  const perims = D.perims;
+  // growth "ended" at the last FEDS step that added more than 250 acres
+  const growthEnd = D.growthEnd; // null when unknown
+  // hide layers / readouts a fire does not have (e.g. no GOES or FEDS outside the Americas)
+  const hide = (cond, ...ids) => { if (cond) for (const id of ids) { const el = document.getElementById(id); if (el) el.hidden = true; } };
+  hide(!D.goes.length, "row-goes", "stat-frp", "tl-goes");
+  hide(!perims.length, "row-feds", "stat-area", "tl-feds");
+
+  const state = { t: D.initialT, playing: false, speed: 3, trail: 12, range: "run",
+                  layers: { viirs: true, burn: true, goes: true, feds: true, final: true } };
+
+  const upper = (arr, v) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= v) lo = m + 1; else hi = m; } return lo; };
+  const pad2 = n => String(n).padStart(2, "0");
+  const fmt = (t, offH = 0) => { const d = new Date(T0 + (t + offH * 60) * 60000); return { mon: MON[d.getUTCMonth()], day: d.getUTCDate(), hm: pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes()) }; };
+  const fmtShort = t => { const f = fmt(t); return `${f.mon} ${f.day} ${f.hm} UTC`; };
+  const num = n => Math.round(n).toLocaleString("en-US");
+
+  // ---------- map ----------
+  const base = new Image(); base.src = D.basemap;
+  const mapC = document.getElementById("map"), mctx = mapC.getContext("2d");
+  const mapbox = document.getElementById("mapbox");
+  let MW = 0, MH = 0, dpr = 1;
+  function sizeMap() {
+    dpr = window.devicePixelRatio || 1;
+    const maxH = Math.max(320, window.innerHeight * 0.72);
+    const sw = mapbox.parentElement.clientWidth, avail = window.matchMedia("(max-width: 880px)").matches ? sw : sw - 306;
+    MW = Math.min(avail, maxH * D.aspect); MH = MW / D.aspect;
+    mapbox.style.width = MW + "px";
+    mapC.width = Math.round(MW * dpr); mapC.height = Math.round(MH * dpr);
+    mapC.style.height = MH + "px";
+  }
+  const X = u => u * MW, Y = v => v * MH;
+  function ringPath(ctx, rings) { ctx.beginPath(); for (const r of rings) { r.forEach(([u, v], i) => i ? ctx.lineTo(X(u), Y(v)) : ctx.moveTo(X(u), Y(v))); ctx.closePath(); } }
+  function lerpColor(a, b, f) { const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    const ch = s => [(s >> 16) & 255, (s >> 8) & 255, s & 255]; const A = ch(pa), B = ch(pb);
+    return `rgb(${A.map((x, i) => Math.round(x + (B[i] - x) * f)).join(",")})`; }
+  function ageColor(f) { return f < 0.5 ? lerpColor(C.hot, C.ember, f / 0.5) : lerpColor(C.ember, "#c2410c", (f - 0.5) / 0.5); }
+  function star(ctx, x, y, r) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; ctx.lineTo(x + rr * Math.cos(a), y + rr * Math.sin(a)); } ctx.closePath(); }
+
+  let recentDrawn = [];
+  function drawMap() {
+    const ctx = mctx, t = state.t, L = state.layers, k = MW / 700;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, MW, MH);
+    if (base.complete) { ctx.globalAlpha = 0.9; ctx.drawImage(base, 0, 0, MW, MH); ctx.globalAlpha = 1; }
+    ctx.fillStyle = "rgba(18,16,14,0.62)"; ctx.fillRect(0, 0, MW, MH);
+
+    if (L.final) { ringPath(ctx, D.final.rings); ctx.setLineDash([6, 4]); ctx.strokeStyle = "rgba(238,232,223,0.75)"; ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([]); }
+
+    let per = null; for (const p of perims) if (p.t <= t) per = p;
+    if (L.feds && per) { ringPath(ctx, per.rings); ctx.fillStyle = "rgba(134,184,255,0.13)"; ctx.fill("evenodd"); ctx.strokeStyle = C.perim; ctx.lineWidth = 1.5; ctx.stroke(); }
+
+    if (L.goes) {
+      const from = upper(goesT, t - 20), to = upper(goesT, t), best = new Map();
+      for (let i = from; i < to; i++) { const [, id, f] = goes[i]; best.set(id, Math.max(best.get(id) ?? 0, f)); }
+      for (const [id, f] of best) {
+        const q = D.goesPix[id]; ctx.beginPath(); q.forEach(([u, v], i) => i ? ctx.lineTo(X(u), Y(v)) : ctx.moveTo(X(u), Y(v))); ctx.closePath();
+        const a = Math.min(0.62, 0.16 + 0.13 * Math.log10(f + 1));
+        ctx.fillStyle = `rgba(255,122,47,${a.toFixed(3)})`; ctx.fill(); ctx.strokeStyle = "rgba(255,122,47,0.85)"; ctx.lineWidth = 1; ctx.stroke();
+      }
+    }
+
+    const n = upper(viirsT, t), win = state.trail * 60;
+    recentDrawn = [];
+    if (L.burn) {
+      ctx.fillStyle = C.char; ctx.globalAlpha = 0.75;
+      for (let i = 0; i < n; i++) { const p = viirs[i]; if (t - p[0] > win || !L.viirs) { ctx.beginPath(); ctx.arc(X(p[1]), Y(p[2]), 1.7 * k + 0.4, 0, 7); ctx.fill(); } }
+      ctx.globalAlpha = 1;
+    }
+    if (L.viirs) {
+      for (let i = 0; i < n; i++) {
+        const p = viirs[i], age = t - p[0]; if (age > win) continue;
+        const f = age / win, r = (1.8 + Math.min(6, Math.sqrt(p[3]) * 0.4)) * k + 0.5, x = X(p[1]), y = Y(p[2]);
+        ctx.shadowBlur = age < 180 ? 10 * k : 0; ctx.shadowColor = C.ember;
+        ctx.globalAlpha = 1 - 0.45 * f; ctx.fillStyle = ageColor(f);
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+        recentDrawn.push([x, y, p]);
+      }
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
+
+    if (t >= D.ignition.t) {
+      const [u, v] = D.ignition.xy; star(ctx, X(u), Y(v), 9 * k + 3);
+      ctx.fillStyle = "#e34948"; ctx.fill(); ctx.strokeStyle = C.ground; ctx.lineWidth = 1.2; ctx.stroke();
+      label(ctx, "Ignition", X(u) + 10 * k + 4, Y(v) + 4);
+    }
+    for (const m of D.merged) {
+      if (t < m.t) continue;
+      const [u, v] = m.xy, x = X(u), y = Y(v), r = 6 * k + 2;
+      ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * 0.8); ctx.lineTo(x - r, y + r * 0.8); ctx.closePath();
+      ctx.fillStyle = C.hot; ctx.fill(); ctx.strokeStyle = C.ground; ctx.stroke();
+      label(ctx, `${m.name} start (${num(m.acres)} ac, merged)`, x + r + 4, y + 4);
+    }
+    // scale bar: 5 km
+    const px5 = 5 / D.kmPerUnitX * MW, sx = MW - px5 - 14, sy = MH - 16;
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + px5, sy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx, sy - 4); ctx.lineTo(sx, sy + 1); ctx.moveTo(sx + px5, sy - 4); ctx.lineTo(sx + px5, sy + 1); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.font = `500 11px ${css("--mono")}`; ctx.fillStyle = C.ink; ctx.textAlign = "center"; ctx.fillText("5 km", sx + px5 / 2, sy - 6); ctx.textAlign = "left";
+  }
+  function label(ctx, s, x, y) {
+    ctx.font = `500 11.5px ${css("--body")}`; const w = ctx.measureText(s).width;
+    if (x + w + 4 > MW) x = Math.max(4, MW - w - 6);  // keep labels inside the map
+    if (y - 12 < 0) y = 14;
+    ctx.fillStyle = "rgba(18,16,14,0.78)"; ctx.fillRect(x - 3, y - 12, w + 6, 16);
+    ctx.fillStyle = C.ink; ctx.fillText(s, x, y);
+  }
+
+  // map hover
+  const tip = document.getElementById("tip");
+  mapC.addEventListener("pointermove", e => {
+    const r = mapC.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    let best = null, bd = 100;
+    for (const d of recentDrawn) { const dd = (d[0] - mx) ** 2 + (d[1] - my) ** 2; if (dd < bd) { bd = dd; best = d; } }
+    if (!best) { tip.hidden = true; return; }
+    const p = best[2], age = state.t - p[0];
+    tip.innerHTML = `<b>VIIRS ${SAT[p[4]]}</b><br>${fmtShort(p[0])} (${Math.floor(age / 60)} h ${age % 60} min ago)<br>FRP ${p[3].toFixed(1)} MW`;
+    tip.hidden = false;
+    const tx = Math.min(mx + 14, MW - tip.offsetWidth - 6), ty = my + 14 + tip.offsetHeight > MH ? my - tip.offsetHeight - 10 : my + 14;
+    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+  });
+  mapC.addEventListener("pointerleave", () => { tip.hidden = true; });
+
+  // ---------- timeline ----------
+  const tlC = document.getElementById("tl"), tctx = tlC.getContext("2d");
+  let TW = 0, TH = 150;
+  const M = { l: 14, r: 14, top: 26, bot: 24 };
+  function sizeTl() { TW = tlC.clientWidth; tlC.width = Math.round(TW * dpr); tlC.height = Math.round(TH * dpr); }
+  const rng = () => RANGES[state.range];
+  const tx = t => { const [a, b] = rng(); return M.l + (t - a) / (b - a) * (TW - M.l - M.r); };
+  const xt = x => { const [a, b] = rng(); return a + (x - M.l) / (TW - M.l - M.r) * (b - a); };
+
+  function drawTl() {
+    const ctx = tctx, [a, b] = rng(), y0 = TH - M.bot, y1 = M.top, ph = y0 - y1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = C.panel; ctx.fillRect(0, 0, TW, TH);
+    // nights: 20:00-06:00 local time
+    const nightStart = (((20 - D.tz.offsetH) * 60) % 1440 + 1440) % 1440;
+    ctx.fillStyle = "#0c0a09";
+    for (let d = 0; (d - 1) * 1440 < b; d++) { const s = (d - 1) * 1440 + nightStart, e = s + 600; if (e < a || s > b) continue; ctx.fillRect(tx(Math.max(s, a)), y1, tx(Math.min(e, b)) - tx(Math.max(s, a)), ph); }
+    // day ticks
+    ctx.font = `400 11px ${css("--mono")}`; ctx.fillStyle = C.muted; ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+    const step = (b - a) > 9 * 1440 ? 2 : 1;
+    for (let d = Math.ceil(a / 1440); d * 1440 <= b; d++) { const x = tx(d * 1440); ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, y0 + 4); ctx.stroke();
+      if (d % step === 0) { const f = fmt(d * 1440), s = `${f.mon} ${f.day}`; if (x + 3 + ctx.measureText(s).width < TW) ctx.fillText(s, x + 3, y0 + 16); } }
+    // GOES FRP area (max per pixel column)
+    const i0 = upper(seriesT, a) - 1, i1 = upper(seriesT, b);
+    let vmax = 1; for (let i = Math.max(0, i0); i < i1; i++) vmax = Math.max(vmax, series[i][1]);
+    const cols = new Map();
+    for (let i = Math.max(0, i0); i < i1; i++) { const x = Math.round(tx(series[i][0])); cols.set(x, Math.max(cols.get(x) ?? 0, series[i][1])); }
+    const yv = v => y0 - v / vmax * (ph - 8);
+    ctx.beginPath(); ctx.moveTo(tx(a), y0);
+    for (const [x, v] of [...cols].sort((p, q) => p[0] - q[0])) ctx.lineTo(x, yv(v));
+    ctx.lineTo(tx(b), y0); ctx.closePath(); ctx.fillStyle = "rgba(255,122,47,0.32)"; ctx.fill();
+    ctx.beginPath(); let first = true;
+    for (const [x, v] of [...cols].sort((p, q) => p[0] - q[0])) { first ? ctx.moveTo(x, yv(v)) : ctx.lineTo(x, yv(v)); first = false; }
+    ctx.strokeStyle = C.ember; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.fillStyle = C.ink2; ctx.fillText(`${(vmax / 1000).toFixed(1)} GW`, M.l + 4, y1 + 12);
+    // VIIRS passes (top row)
+    for (const [t, , f, n] of D.passes) { if (t < a || t > b) continue; ctx.beginPath(); ctx.arc(tx(t), y1 - 9, 2 + Math.min(4, Math.sqrt(n) / 3), 0, 7); ctx.fillStyle = C.hot; ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1; }
+    // FEDS steps (bottom row)
+    ctx.fillStyle = C.perim;
+    for (const p of perims) { if (p.t < a || p.t > b) continue; const x = tx(p.t); ctx.beginPath(); ctx.moveTo(x, y0 - 9); ctx.lineTo(x + 4, y0 - 5); ctx.lineTo(x, y0 - 1); ctx.lineTo(x - 4, y0 - 5); ctx.closePath(); ctx.fill(); }
+    // events
+    const ev = [[D.ignition.t, "Ignition", C.hot, []], [growthEnd ?? -1e9, "Growth ends", C.ink2, [2, 3]], [D.containment ?? -1e9, "Contained", C.ink2, [2, 3]]]
+      .concat(D.nisar.map(t => [t, "NISAR", C.nisar, [4, 3]]));
+    ctx.font = `500 10.5px ${css("--mono")}`;
+    for (const [t, s, col, dash] of ev) { if (t < a || t > b) continue; const x = tx(t);
+      ctx.setLineDash(dash); ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, y0); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; const w = ctx.measureText(s).width; ctx.fillText(s, Math.min(x + 4, TW - w - 4), y1 + 26); }
+    // cursor
+    const cx = tx(Math.min(Math.max(state.t, a), b));
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx, 4); ctx.lineTo(cx, y0); ctx.stroke();
+    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(cx, 6, 5, 0, 7); ctx.fill();
+  }
+
+  let dragging = false;
+  const setFromX = x => setT(xt(x));
+  tlC.addEventListener("pointerdown", e => { dragging = true; tlC.setPointerCapture(e.pointerId); stop(); setFromX(e.offsetX); });
+  tlC.addEventListener("pointermove", e => { if (dragging) setFromX(e.offsetX); });
+  tlC.addEventListener("pointerup", () => { dragging = false; });
+
+  // ---------- readouts ----------
+  const $ = id => document.getElementById(id);
+  function readouts() {
+    const t = state.t, f = fmt(t), l = fmt(t, D.tz.offsetH), since = t - D.ignition.t;
+    $("clock").innerHTML = `${f.mon} ${f.day} <span>·</span> ${f.hm} UTC`;
+    const sinceTxt = since >= 0 ? `${Math.floor(since / 60)} h ${since % 60} min after ignition` : `${Math.ceil(-since / 60)} h before ignition`;
+    $("clock-sub").textContent = `${l.mon} ${l.day} ${l.hm} ${D.tz.name} · ${sinceTxt}`;
+    let per = null; for (const p of perims) if (p.t <= t) per = p;
+    $("s-area").innerHTML = `${per ? num(per.acres) : 0}<small>acres</small>`;
+    $("s-area-n").textContent = per ? `${per.km2} km² · ${Math.round(per.acres / D.final.acres * 100)}% of official final · mapped ${fmtShort(per.t)}` : "no perimeter yet";
+    const si = upper(seriesT, t) - 1, sc = si >= 0 ? series[si] : null;
+    $("s-frp").innerHTML = `${sc && t - sc[0] < 30 ? num(sc[1]) : 0}<small>MW</small>`;
+    $("s-frp-n").textContent = sc ? `scan ${fmt(sc[0]).hm} UTC` : "no scan yet";
+    const n = upper(viirsT, t), m = upper(viirsT, t - state.trail * 60);
+    $("s-viirs").textContent = num(n - m);
+    $("s-viirs-n").textContent = `last ${state.trail} h · ${num(n)} total`;
+    const [a, b] = rng();
+    tlC.setAttribute("aria-valuenow", String(Math.round((t - a) / (b - a) * 100)));
+    tlC.setAttribute("aria-valuetext", fmtShort(t));
+  }
+
+  function render() { drawMap(); drawTl(); readouts(); }
+  function setT(t) { const [a, b] = rng(); state.t = Math.round(Math.min(Math.max(t, a), b)); render(); }
+
+  // ---------- playback ----------
+  let last = 0, raf = 0;
+  function frame(ts) {
+    if (!state.playing) return;
+    const dt = last ? (ts - last) / 1000 : 0; last = ts;
+    const [, b] = rng(); state.t = Math.min(b, state.t + dt * state.speed * 60);
+    render();
+    if (state.t >= b) { stop(); return; }
+    raf = requestAnimationFrame(frame);
+  }
+  function play() { const [a, b] = rng(); if (state.t >= b - 1) state.t = a; state.playing = true; last = 0; raf = requestAnimationFrame(frame); playUI(); }
+  function stop() { state.playing = false; cancelAnimationFrame(raf); playUI(); }
+  function playUI() {
+    $("play-label").textContent = state.playing ? "Pause" : "Play";
+    $("play").setAttribute("aria-label", state.playing ? "Pause" : "Play");
+    $("play-icon").innerHTML = state.playing ? '<path d="M2 1h3v10H2zM7 1h3v10H7z"/>' : '<path d="M2 1l9 5-9 5z"/>';
+  }
+  $("play").addEventListener("click", () => state.playing ? stop() : play());
+  $("speed").addEventListener("change", e => { state.speed = +e.target.value; });
+  $("trail").addEventListener("change", e => { state.trail = +e.target.value; render(); });
+  $("range").addEventListener("change", e => { state.range = e.target.value; setT(state.t); });
+  for (const k of Object.keys(state.layers)) $("l-" + k).addEventListener("change", e => { state.layers[k] = e.target.checked; drawMap(); });
+  document.addEventListener("keydown", e => {
+    if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT" && e.key === " ") return;
+    if (e.key === " " ) { e.preventDefault(); state.playing ? stop() : play(); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); stop(); setT(state.t + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 720 : 60)); }
+  });
+
+  function resize() { sizeMap(); sizeTl(); render(); }
+  new ResizeObserver(resize).observe(document.querySelector(".wrap"));
+  base.onload = render;
+  if (document.fonts) document.fonts.ready.then(render);
+  resize();
+})();
+</script>
