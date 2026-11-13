@@ -113,7 +113,7 @@ def write_readme(fire: str) -> bool:
     return True
 
 
-def write_summary(fires: list[str]) -> None:
+def write_summary(fires: list[str], in_progress: list[str] = ()) -> None:
     docs = REPO_ROOT / "docs"
     rows, md = [], ["# Fire ground truth: data and agreement summary", "",
                     "One table per fire, one row per data item. Every agreement value is measured against the "
@@ -151,6 +151,12 @@ def write_summary(fires: list[str]) -> None:
                      "resolution": "", "update_rate": "", "coverage": "", "metric": "all_cover",
                      "value": m["all_cover"], "unit": "%", "note": ""})
         md.append("")
+    for fire in in_progress:
+        F = FIRES[fire]
+        md += [f"## {F.name}", "", "**In progress**: data download / processing not finished yet. "
+               "This table will be filled in when the pipeline run completes.", ""]
+        rows.append({"fire": F.name, "item": "", "source": "", "time_range": "", "resolution": "", "update_rate": "",
+                     "coverage": "", "metric": "", "value": "in progress", "unit": "", "note": "pipeline run not finished"})
     md += ["## Metric definitions", "",
            "W = official final perimeter (NIFC WFIGS). Pixel footprints: VIIRS = scan × track rectangle of each "
            "375 m detection; GOES = fixed-grid pixel corners. Points flagged `ambiguous` (also near a neighbouring "
@@ -176,5 +182,6 @@ if __name__ == "__main__":
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("readme"); r.add_argument("fire", choices=FIRES)
     s = sub.add_parser("summary"); s.add_argument("fires", nargs="+", choices=FIRES)
+    s.add_argument("--in-progress", nargs="*", default=[], choices=FIRES)
     a = ap.parse_args()
-    write_readme(a.fire) if a.cmd == "readme" else write_summary(a.fires)
+    write_readme(a.fire) if a.cmd == "readme" else write_summary(a.fires, a.in_progress)
