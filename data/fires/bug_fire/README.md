@@ -154,6 +154,8 @@ from 5,757 scans (Aug 8-27; 3 scans missing in the bucket).
 - `burned_area_vs_time.png`
 - `frp_vs_time.png`: VIIRS + GOES total FRP
 - `viirs_frp_map.png`
+- `bug_fire_spread.html`: interactive time-lapse (open in a browser; no server needed).
+  Rebuild with `python -m firedata.web bug_fire`.
 
 ## Caveats
 
