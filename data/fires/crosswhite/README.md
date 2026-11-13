@@ -33,6 +33,8 @@ Built with `python scripts/build_ground_truth.py crosswhite` (raw downloads cach
 - Multiple ignitions: 9 other WFIGS incidents start inside the final Crosswhite perimeter, including 0433 BREWER (70,821 acres) and 0512 BOX SPRINGS (21,432 acres). The official perimeter is a merger of several lightning fires, so 'first detection' metrics are measured against one origin only: the first VIIRS detection (61 km from the Crosswhite origin) belongs to another of the merged fires. GOES saw the Crosswhite start 11 min before the official discovery, 3.2 km from the origin.
 - FEDS reaches 96% of the official area here (IoU 64%), but 280 km² of the FEDS perimeter lies outside the official perimeter (likely neighbouring complex fires that FEDS tracked as the same fire).
 - Growth ended ~2026-08-11 (FEDS); post-fire NISAR passes are 36 days after the pre-fire ones on every track.
+- Decision (2026-11-13): because of the multiple ignitions, Crosswhite is used for validation only, not calibration.
+- `processed/fire_points.csv` is not committed for this fire (size); use `fire_points.parquet`.
 
 Neighbouring fires in the search box (detections closer to them are excluded): 0456 (25,253 ac), Deep Canyon (9,170 ac), Rosenbaum (483 ac), Grasshopper (93,971 ac), 0432 (2,183 ac), Henry (29,844 ac), 0480 WILCOX (5,651 ac), Parrish (404 ac), Shingle (73,183 ac), 0460 HOPKIN (11,366 ac), Conant (107 ac), Coyote (17,460 ac), Ten Mile (4,834 ac), 0594 (298 ac), Camel Hump (6,789 ac), Bench (67,071 ac), 0449 PORCUPINE RIDGE (79,225 ac), Pilot (126 ac), 0462 (22,815 ac), 0567 LITTLE BUCK (43,818 ac), 586 (191 ac), Crooked (353 ac), Round Butte (1,163 ac), 0615 (108 ac).
 

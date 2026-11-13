@@ -4,3 +4,4 @@ data/**/raw/
 __pycache__/
 *.pyc
 *.egg-info/
+data/fires/crosswhite/processed/fire_points.csv
