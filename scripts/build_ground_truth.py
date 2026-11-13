@@ -46,10 +46,12 @@ def main():
     sel = feds.select_fire_ids(fire, F.start_utc, F.end_utc)
     sel.to_csv(proc / "feds_fire_ids_selected.csv", index=False)
     print(sel.to_string(index=False))
-    fids = [F.feds_fireid] if F.feds_fireid is not None else sel[sel.selected].fireid.tolist()
+    keys = ([(F.feds_fireid, "CONUS")] if F.feds_fireid is not None
+            else list(sel[sel.selected][["fireid", "region"]].itertuples(index=False, name=None)))
+    fids = [k[0] for k in keys]
     per_id, lines = [], []
-    for fid in fids:
-        fd = feds.download_feds(fid, raw)
+    for fid, region in keys:
+        fd = feds.download_feds(fid, raw, region)
         per_id.append(feds.tidy_perimeters(fd["perimeter"]))
         lines.append(fd["fireline"])
     if per_id:
