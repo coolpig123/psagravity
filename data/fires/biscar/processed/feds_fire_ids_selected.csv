@@ -1,0 +1,4 @@
+fireid,region,n_steps,max_area_km2,overlap_km2,frac_inside,selected,reason
+64520.0,CONUS,10,20.32,19.38,0.954,True,inside official perimeter
+64525.0,CONUS,10,5.54,5.38,0.971,True,inside official perimeter
+64741.0,CONUS,12,5.53,4.05,0.732,True,inside official perimeter

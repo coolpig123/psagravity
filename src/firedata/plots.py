@@ -191,7 +191,8 @@ def feds_vs_wfigs_map(F: FireConfig, perims: gpd.GeoDataFrame, final: gpd.GeoDat
     w = final.to_crs(EQUAL_AREA)
     fe = perims.iloc[[perims.step_utc.argmax()]].to_crs(EQUAL_AREA)
     wa, fa = w.area.iloc[0] / 1e6, fe.area.iloc[0] / 1e6
-    inter = w.geometry.iloc[0].intersection(fe.geometry.iloc[0]).area / 1e6
+    from .process import valid
+    inter = valid(w.geometry.iloc[0]).intersection(valid(fe.geometry.iloc[0])).area / 1e6
     v = points[points.source.str.startswith("VIIRS")]
 
     fig, ax = plt.subplots(figsize=(8, 7.2))
@@ -219,7 +220,7 @@ def feds_vs_wfigs_map(F: FireConfig, perims: gpd.GeoDataFrame, final: gpd.GeoDat
         matplotlib.patches.Patch(facecolor="#9a9890", alpha=0.35, edgecolor=INK,
                                  label=f"NIFC WFIGS final: {wa:,.1f} km² ({wa * 247.105:,.0f} acres)"),
         matplotlib.patches.Patch(facecolor=SERIES["GOES18_FDC"], alpha=0.85,
-                                 label=f"FEDS final (fireid {int(fe.fireid.iloc[0])}): {fa:,.1f} km² ({fa * 247.105:,.0f} acres)"),
+                                 label=f"FEDS final (fireid {_ids(fe.fireid.iloc[0])}): {fa:,.1f} km² ({fa * 247.105:,.0f} acres)"),
         matplotlib.lines.Line2D([], [], marker="o", ls="", color=INK, alpha=0.5, ms=3,
                                 label=f"VIIRS 375 m detections ({len(v):,})"),
     ]
@@ -230,11 +231,19 @@ def feds_vs_wfigs_map(F: FireConfig, perims: gpd.GeoDataFrame, final: gpd.GeoDat
     fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
 
 
+def _ids(v) -> str:
+    """FEDS fire id(s) as text: '69872' or '64520, 64525'."""
+    return ", ".join(str(int(float(x))) for x in str(v).split(","))
+
+
 def make_all(F: FireConfig, points, perims, final, frp, fig_dir: Path, merged: pd.DataFrame | None = None):
     fig_dir = Path(fig_dir)
-    feds_vs_wfigs_map(F, perims, final, points, fig_dir / "feds_vs_wfigs_final.png", merged)
-    perimeter_map(F, perims, final, fig_dir / "perimeters_12h_map.png")
-    burned_area(F, perims, final, fig_dir / "burned_area_vs_time.png")
+    if perims is not None and len(perims):
+        feds_vs_wfigs_map(F, perims, final, points, fig_dir / "feds_vs_wfigs_final.png", merged)
+        perimeter_map(F, perims, final, fig_dir / "perimeters_12h_map.png")
+        burned_area(F, perims, final, fig_dir / "burned_area_vs_time.png")
+    else:
+        print("  (no FEDS: skipping perimeter figures)")
     frp_timeseries(F, frp, final, fig_dir / "frp_vs_time.png")
     viirs_frp_map(F, points, final, fig_dir / "viirs_frp_map.png")
     print(f"  figures written to {fig_dir}")

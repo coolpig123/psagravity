@@ -23,6 +23,7 @@
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
+[hidden] { display: none !important; }
 html, body { background: var(--ground); color: var(--ink); }
 body {
   font: 14px/1.5 var(--body);
@@ -33,6 +34,8 @@ body {
 .wrap { max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
 
 header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px 32px; }
+.pick { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink-2); font-size: 12.5px; }
+.pick select { font: 600 15px var(--body); }
 .title h1 { font: 600 40px/1 var(--display); letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
 .title p { margin: 6px 0 0; color: var(--ink-2); }
 .clock { text-align: right; font-variant-numeric: tabular-nums; }
@@ -94,8 +97,12 @@ footer strong { color: var(--ink); font-weight: 500; }
 <div class="wrap">
   <header>
     <div class="title">
-      <h1>__NAME__</h1>
-      <p>__SUBTITLE__</p>
+      <div class="pick" id="pick-row" hidden>
+        <label for="fire-pick">Fire</label>
+        <select id="fire-pick"></select>
+      </div>
+      <h1 id="f-name">—</h1>
+      <p id="f-sub">&nbsp;</p>
     </div>
     <div class="clock" aria-live="polite">
       <div class="utc" id="clock">—</div>
@@ -123,8 +130,8 @@ footer strong { color: var(--ink); font-weight: 500; }
     </label>
     <label class="field" for="range">Timeline
       <select id="range">
-        <option value="run" selected>__RUN_LABEL__</option>
-        <option value="nisar">__NISAR_LABEL__</option>
+        <option value="run" id="opt-run" selected>Main run</option>
+        <option value="nisar" id="opt-nisar">Through NISAR passes</option>
       </select>
     </label>
     <span class="hint">Space: play · ← →: 1 h · Shift: 12 h</span>
@@ -166,13 +173,13 @@ footer strong { color: var(--ink); font-weight: 500; }
           <span class="lbl">Earlier detections<em>where fire has already been</em></span></label>
         <label class="layer" id="row-goes" for="l-goes"><input type="checkbox" id="l-goes" checked>
           <span class="sw"><span class="sq-goes"></span></span>
-          <span class="lbl">__GOES_LABEL__ fire pixels<em>last 20 min</em></span></label>
+          <span class="lbl"><span class="goes-label">GOES</span> fire pixels<em>last 20 min</em></span></label>
         <label class="layer" id="row-feds" for="l-feds"><input type="checkbox" id="l-feds" checked>
           <span class="sw"><span class="ln-feds"></span></span>
           <span class="lbl">FEDS perimeter<em>latest 12 h step, lower bound</em></span></label>
         <label class="layer" for="l-final"><input type="checkbox" id="l-final" checked>
           <span class="sw"><span class="ln-final"></span></span>
-          <span class="lbl">Official final perimeter<em>__FINAL_LABEL__</em></span></label>
+          <span class="lbl">Official final perimeter<em id="f-final">&nbsp;</em></span></label>
       </div>
     </aside>
   </div>
@@ -180,46 +187,31 @@ footer strong { color: var(--ink); font-weight: 500; }
   <div class="timeline">
     <canvas id="tl" tabindex="0" role="slider" aria-label="Time" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></canvas>
     <div class="tl-legend">
-      <span id="tl-goes"><i style="width:14px;height:8px;background:rgba(255,122,47,.45);border-top:1.5px solid var(--ember)"></i>__GOES_LABEL__ total FRP (__GOES_STEP__)</span>
+      <span id="tl-goes"><i style="width:14px;height:8px;background:rgba(255,122,47,.45);border-top:1.5px solid var(--ember)"></i><span class="goes-label">GOES</span> total FRP (5 min)</span>
       <span><i style="width:7px;height:7px;border-radius:50%;background:var(--hot)"></i>VIIRS overpass</span>
       <span id="tl-feds"><i style="width:7px;height:7px;background:var(--perim);transform:rotate(45deg)"></i>FEDS perimeter</span>
       <span><i style="width:0;height:12px;border-left:1.5px dashed var(--nisar)"></i>NISAR pass</span>
-      <span><i style="width:14px;height:10px;background:#0c0a09;border:1px solid var(--line)"></i>night (20:00–06:00 __TZ__)</span>
+      <span><i style="width:14px;height:10px;background:#0c0a09;border:1px solid var(--line)"></i>night (20:00–06:00 <span id="f-tz">local</span>)</span>
     </div>
   </div>
 
-  <footer>
-__FOOTER__
-  </footer>
+  <footer id="f-footer"></footer>
 </div>
 
-<script type="application/json" id="fire-data">__DATA__</script>
+__DATA_BLOCK__
 <script>
 (() => {
-  const D = JSON.parse(document.getElementById("fire-data").textContent);
-  const T0 = Date.parse(D.t0);
+  let D, T0, RANGES, viirs, viirsT, goes, goesT, series, seriesT, perims, growthEnd;
+  const $ = id => document.getElementById(id);
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const SAT = ["S-NPP", "NOAA-20", "NOAA-21"];
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const C = { ground: css("--ground"), panel: css("--panel"), line: css("--line"), ink: css("--ink"), ink2: css("--ink-2"),
               muted: css("--muted"), ember: css("--ember"), hot: css("--hot"), char: css("--char"), perim: css("--perim"), nisar: css("--nisar") };
-  const RANGES = D.ranges;
+  // show / hide layers and readouts a fire does not have (e.g. no GOES or FEDS outside the Americas)
+  const showIf = (cond, ...ids) => { for (const id of ids) { const el = document.getElementById(id); if (el) el.hidden = !cond; } };
 
-  const viirs = D.viirs.slice().sort((a, b) => a[0] - b[0]);
-  const viirsT = viirs.map(p => p[0]);
-  const goes = D.goes.slice().sort((a, b) => a[0] - b[0]);
-  const goesT = goes.map(p => p[0]);
-  const series = D.goesSeries;
-  const seriesT = series.map(p => p[0]);
-  const perims = D.perims;
-  // growth "ended" at the last FEDS step that added more than 250 acres
-  const growthEnd = D.growthEnd; // null when unknown
-  // hide layers / readouts a fire does not have (e.g. no GOES or FEDS outside the Americas)
-  const hide = (cond, ...ids) => { if (cond) for (const id of ids) { const el = document.getElementById(id); if (el) el.hidden = true; } };
-  hide(!D.goes.length, "row-goes", "stat-frp", "tl-goes");
-  hide(!perims.length, "row-feds", "stat-area", "tl-feds");
-
-  const state = { t: D.initialT, playing: false, speed: 3, trail: 12, range: "run",
+  const state = { t: 0, playing: false, speed: 3, trail: 12, range: "run",
                   layers: { viirs: true, burn: true, goes: true, feds: true, final: true } };
 
   const upper = (arr, v) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= v) lo = m + 1; else hi = m; } return lo; };
@@ -229,7 +221,7 @@ __FOOTER__
   const num = n => Math.round(n).toLocaleString("en-US");
 
   // ---------- map ----------
-  const base = new Image(); base.src = D.basemap;
+  const base = new Image();
   const mapC = document.getElementById("map"), mctx = mapC.getContext("2d");
   const mapbox = document.getElementById("mapbox");
   let MW = 0, MH = 0, dpr = 1;
@@ -295,7 +287,7 @@ __FOOTER__
     if (t >= D.ignition.t) {
       const [u, v] = D.ignition.xy; star(ctx, X(u), Y(v), 9 * k + 3);
       ctx.fillStyle = "#e34948"; ctx.fill(); ctx.strokeStyle = C.ground; ctx.lineWidth = 1.2; ctx.stroke();
-      label(ctx, "Ignition", X(u) + 10 * k + 4, Y(v) + 4);
+      label(ctx, "Ignition (official)", X(u) + 10 * k + 4, Y(v) + 4);
     }
     for (const m of D.merged) {
       if (t < m.t) continue;
@@ -393,7 +385,6 @@ __FOOTER__
   tlC.addEventListener("pointerup", () => { dragging = false; });
 
   // ---------- readouts ----------
-  const $ = id => document.getElementById(id);
   function readouts() {
     const t = state.t, f = fmt(t), l = fmt(t, D.tz.offsetH), since = t - D.ignition.t;
     $("clock").innerHTML = `${f.mon} ${f.day} <span>·</span> ${f.hm} UTC`;
@@ -444,10 +435,54 @@ __FOOTER__
     else if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); stop(); setT(state.t + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 720 : 60)); }
   });
 
-  function resize() { sizeMap(); sizeTl(); render(); }
+  function resize() { if (!D) return; sizeMap(); sizeTl(); render(); }
+
+  // ---------- fire switching ----------
+  function setFire(nd) {
+    stop();
+    D = nd; T0 = Date.parse(D.t0); RANGES = D.ranges;
+    viirs = D.viirs.slice().sort((a, b) => a[0] - b[0]); viirsT = viirs.map(p => p[0]);
+    goes = D.goes.slice().sort((a, b) => a[0] - b[0]); goesT = goes.map(p => p[0]);
+    series = D.goesSeries; seriesT = series.map(p => p[0]);
+    perims = D.perims; growthEnd = D.growthEnd;            // growthEnd: null when unknown
+    const T = D.text;
+    $("f-name").textContent = T.name; $("f-sub").textContent = T.subtitle;
+    $("opt-run").textContent = T.runLabel; $("opt-nisar").textContent = T.nisarLabel;
+    $("f-final").textContent = T.finalLabel; $("f-tz").textContent = D.tz.name;
+    for (const el of document.querySelectorAll(".goes-label")) el.textContent = D.goesLabel || "GOES";
+    $("f-footer").innerHTML = T.footerHtml;
+    showIf(D.goes.length > 0, "row-goes", "stat-frp", "tl-goes");
+    showIf(perims.length > 0, "row-feds", "stat-area", "tl-feds");
+    state.range = "run"; $("range").value = "run"; state.t = D.initialT;
+    tip.hidden = true;
+    base.src = D.basemap || "";
+    resize();
+  }
   new ResizeObserver(resize).observe(document.querySelector(".wrap"));
-  base.onload = render;
-  if (document.fonts) document.fonts.ready.then(render);
-  resize();
+  base.onload = () => D && render();
+  if (document.fonts) document.fonts.ready.then(() => D && render());
+
+  // Single-fire page: data embedded as JSON. Multi-fire app: window.FIRE_INDEX lists fires and
+  // each fire's data is loaded on demand from data/<slug>.js (works from file:// too).
+  const embedded = document.getElementById("fire-data");
+  if (embedded) {
+    setFire(JSON.parse(embedded.textContent));
+  } else {
+    const idx = window.FIRE_INDEX, pick = $("fire-pick"), cache = {};
+    $("pick-row").hidden = false;
+    for (const f of idx) { const o = document.createElement("option"); o.value = f.slug; o.textContent = f.label; pick.appendChild(o); }
+    const load = slug => {
+      if (cache[slug]) return setFire(cache[slug]);
+      window.FIRE_DATA = window.FIRE_DATA || {};
+      const s = document.createElement("script"); s.src = `data/${slug}.js`;
+      s.onload = () => { cache[slug] = window.FIRE_DATA[slug]; if (pick.value === slug) setFire(cache[slug]); };
+      s.onerror = () => { $("f-sub").textContent = `Could not load data/${slug}.js`; };
+      document.head.appendChild(s);
+    };
+    const fromHash = decodeURIComponent(location.hash.slice(1));
+    pick.value = idx.some(f => f.slug === fromHash) ? fromHash : idx[0].slug;
+    pick.addEventListener("change", () => { history.replaceState(null, "", "#" + pick.value); load(pick.value); });
+    load(pick.value);
+  }
 })();
 </script>
