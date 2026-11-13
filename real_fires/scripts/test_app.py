@@ -1,6 +1,6 @@
 """Browser test of the fire site (app/index.html) or a single-fire page, in headless Chromium.
 
-    pip install -r requirements-dev.txt && playwright install chromium-headless-shell
+    cd real_fires && pip install -r requirements-dev.txt && playwright install chromium-headless-shell
     python scripts/test_app.py app/index.html            # every fire in the selector
     python scripts/test_app.py data/fires/bug_fire/figures/bug_fire_spread.html
 
