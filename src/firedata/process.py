@@ -21,10 +21,15 @@ def assign_to_fire(points: pd.DataFrame, fire: gpd.GeoDataFrame, others: gpd.Geo
     d_target = pts.distance(target).to_numpy()
     d_other = np.full(len(points), np.inf)
     for geom in others.to_crs(EQUAL_AREA).geometry:
+        if geom.area > 0 and geom.intersection(target).area / geom.area > 0.5:
+            continue  # earlier/smaller fire mostly inside the target (e.g. Ringo inside Bug): not a competitor
         d_other = np.minimum(d_other, pts.distance(geom).to_numpy())
     keep = ((d_target <= buffer_m) & (d_target <= d_other)
             & (points.time_utc >= t_min).to_numpy() & (points.time_utc <= t_max).to_numpy())
-    return points.loc[keep].assign(dist_m=d_target[keep]).reset_index(drop=True)
+    # ambiguous: also within the buffer of another fire's perimeter (e.g. GOES pixels between
+    # Bug and Hawk). Kept, but flagged so calibration can drop them.
+    return points.loc[keep].assign(dist_m=d_target[keep], dist_other_m=d_other[keep],
+                                   ambiguous=d_other[keep] <= buffer_m).reset_index(drop=True)
 
 
 def combined_points(viirs: pd.DataFrame, goes: pd.DataFrame) -> pd.DataFrame:
@@ -58,6 +63,9 @@ def goes_scans(goes: pd.DataFrame, scans: pd.DataFrame, source: str) -> pd.DataF
 
 
 def frp_timeseries(viirs: pd.DataFrame, goes: pd.DataFrame, scans: pd.DataFrame) -> pd.DataFrame:
+    """Total FRP per VIIRS overpass / GOES scan, excluding points flagged `ambiguous`."""
+    clean = lambda df: df[~df["ambiguous"]] if "ambiguous" in df else df
+    viirs, goes = clean(viirs), clean(goes)
     parts = [viirs_overpasses(viirs)]
     if not goes.empty:
         parts.append(goes_scans(goes, scans, goes.source.iloc[0]))
