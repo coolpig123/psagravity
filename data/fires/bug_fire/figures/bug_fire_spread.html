@@ -287,7 +287,7 @@ footer strong { color: var(--ink); font-weight: 500; }
     if (t >= D.ignition.t) {
       const [u, v] = D.ignition.xy; star(ctx, X(u), Y(v), 9 * k + 3);
       ctx.fillStyle = "#e34948"; ctx.fill(); ctx.strokeStyle = C.ground; ctx.lineWidth = 1.2; ctx.stroke();
-      label(ctx, "Ignition", X(u) + 10 * k + 4, Y(v) + 4);
+      label(ctx, "Ignition (official)", X(u) + 10 * k + 4, Y(v) + 4);
     }
     for (const m of D.merged) {
       if (t < m.t) continue;
