@@ -28,13 +28,15 @@
     },
     {
       "name": "Summary file + accuracy %",
-      "status": "todo",
-      "est": 60
+      "status": "running",
+      "est": 60,
+      "actual": 15
     },
     {
       "name": "Multi-fire website (tested in a browser)",
-      "status": "todo",
-      "est": 90
+      "status": "running",
+      "est": 90,
+      "actual": 20
     },
     {
       "name": "Short README (Hebrew)",
@@ -47,7 +49,9 @@
     "Issue #7: posted the NISAR track-pairing correction (07-22→08-15 A34, 07-23→08-16 D42, 07-27→08-20 A106).",
     "Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers.",
     "Colwash (WA): done. VIIRS covers only 6% of the official area; GOES saw the fire 48 min after discovery and covers 100% (coarse pixels); FEDS IoU 3%. 4 NISAR same-track pairs (12-day gaps). README + interactive page.",
-    "Biscar (CA): done. FEDS split over 3 ids (IoU 10%); VIIRS covers 26%, GOES 91%; growth over by ~Jul 21 (95% GOES energy Jul 20 22:56 UTC). 4 NISAR same-track pairs. README + interactive page."
+    "Biscar (CA): done. FEDS split over 3 ids (IoU 10%); VIIRS covers 26%, GOES 91%; growth over by ~Jul 21 (95% GOES energy Jul 20 22:56 UTC). 4 NISAR same-track pairs. README + interactive page.",
+    "Summary (`docs/fires_summary.md` + `.csv`) generated for Bug, Colwash, Biscar with metric definitions; Crosswhite listed as in progress.",
+    "Multi-fire site in `app/` (fire picker, on-demand data, works from file://). Browser test `scripts/test_app.py` passes for all 3 fires at desktop and phone width. Crosswhite to be added."
   ],
   "problems": [
     "Branch: `more-fires` is based on `bug-fire-data` (PR #6, not merged) because master has no `src/` yet. The new PR is stacked on #6.",
