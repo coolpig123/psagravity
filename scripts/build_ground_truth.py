@@ -36,11 +36,19 @@ def main():
     others.to_file(proc / "wfigs_neighbour_perimeters.geojson", driver="GeoJSON")
     discovery = fire.attr_FireDiscoveryDateTime.iloc[0]
     t_min = min(discovery, F.ignition_utc) - pd.Timedelta(hours=1)
+    merged = wfigs.incidents_within(fire, F.start_utc, F.end_utc, raw)
+    merged.to_csv(proc / "wfigs_merged_incidents.csv", index=False)
+    if not merged.empty:
+        print("  incidents with origin inside the final perimeter:\n" + merged.to_string(index=False))
 
     print("FEDS ...")
-    feds_ids = feds.find_fire_ids(fire.total_bounds, F.start_utc, F.end_utc)
+    feds_ids = feds.find_fire_ids(F.bbox, F.start_utc, F.end_utc)
+    feds_ids.to_csv(proc / "feds_fire_ids_in_bbox.csv", index=False)
     print(feds_ids.to_string(index=False))
-    fid = F.feds_fireid if F.feds_fireid is not None else feds_ids.sort_values("max_farea_km2").fireid.iloc[-1]
+    if F.feds_fireid is not None:
+        fid = F.feds_fireid
+    else:  # FEDS id with the largest overlap with the official perimeter would be safer; use the largest for now
+        fid = feds.find_fire_ids(fire.total_bounds, F.start_utc, F.end_utc).sort_values("max_farea_km2").fireid.iloc[-1]
     fd = feds.download_feds(fid, raw)
     perim12 = feds.tidy_perimeters(fd["perimeter"])
     perim12.to_file(proc / "feds_perimeters_12h.geojson", driver="GeoJSON")
@@ -83,6 +91,9 @@ def main():
                  "max_area_km2": float(perim12.area_km2.max()),
                  "max_area_acres": float(perim12.area_acres.max()),
                  "last_growth_step_utc": str(perim12[perim12.is_new].step_utc.max())},
+        "feds_fire_ids_in_bbox": feds_ids.astype(str).to_dict("records"),
+        "merged_incidents": merged.astype(str).to_dict("records"),
+        "area_comparison": process.area_comparison(fire, perim12, viirs),
         "points": points.groupby("source").size().to_dict(),
         "first_detection_utc": {s: str(g.time_utc.min()) for s, g in points.groupby("source")},
         "neighbour_fires": others[["poly_IncidentName", "poly_GISAcres", "attr_FireDiscoveryDateTime"]]
@@ -92,7 +103,7 @@ def main():
     print(json.dumps(summary, indent=2))
 
     print("Figures ...")
-    plots.make_all(F, points, perim12, fire, frp, figs)
+    plots.make_all(F, points, perim12, fire, frp, figs, merged)
 
 
 if __name__ == "__main__":
