@@ -1,7 +1,7 @@
-.env
-data/**/raw/
+**/.env
+real_fires/data/**/raw/
 .venv/
 __pycache__/
 *.pyc
 *.egg-info/
-data/fires/crosswhite/processed/fire_points.csv
+real_fires/data/fires/crosswhite/processed/fire_points.csv
