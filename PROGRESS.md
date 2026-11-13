@@ -1,8 +1,8 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [██████░░░░░░░░░░] 38%   elapsed 45m / est. total ~5h40m  → ~4h55m left
-Last update: 2026-11-13 12:00 UTC
+Overall: [██████░░░░░░░░░░] 38%   elapsed 49m / est. total ~5h09m  → ~4h20m left
+Last update: 2026-11-13 12:03 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
@@ -11,8 +11,8 @@ Last update: 2026-11-13 12:00 UTC
 | 2 | Crosswhite (OR) | 🔄 | 1h30m | 5m |
 | 3 | Colwash (WA) | ✅ | 45m | 25m |
 | 4 | Biscar (CA) | ✅ | 45m | 25m |
-| 5 | Summary file + accuracy % | ⏳ | 1h00m |  |
-| 6 | Multi-fire website (tested in a browser) | ⏳ | 1h30m |  |
+| 5 | Summary file + accuracy % | 🔄 | 1h00m | 15m |
+| 6 | Multi-fire website (tested in a browser) | 🔄 | 1h30m | 20m |
 | 7 | Short README (Hebrew) | ⏳ | 1h00m |  |
 
 ## Done so far
@@ -22,6 +22,8 @@ Last update: 2026-11-13 12:00 UTC
 - Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers.
 - Colwash (WA): done. VIIRS covers only 6% of the official area; GOES saw the fire 48 min after discovery and covers 100% (coarse pixels); FEDS IoU 3%. 4 NISAR same-track pairs (12-day gaps). README + interactive page.
 - Biscar (CA): done. FEDS split over 3 ids (IoU 10%); VIIRS covers 26%, GOES 91%; growth over by ~Jul 21 (95% GOES energy Jul 20 22:56 UTC). 4 NISAR same-track pairs. README + interactive page.
+- Summary (`docs/fires_summary.md` + `.csv`) generated for Bug, Colwash, Biscar with metric definitions; Crosswhite listed as in progress.
+- Multi-fire site in `app/` (fire picker, on-demand data, works from file://). Browser test `scripts/test_app.py` passes for all 3 fires at desktop and phone width. Crosswhite to be added.
 
 ## Problems / data mismatches
 
