@@ -19,8 +19,8 @@ by NISAR since June 2026.
 
 ## Study fires
 
-- **Bug Fire, CA/NV (primary)**: ignition 2026-08-08 23:08 UTC at 39.727395, -120.0372941;
-  ~93,733 acres; 100% contained 2026-08-27.
+- **Bug Fire, CA/NV (primary)**: ignition 2026-08-08 22:30 UTC (WFIGS discovery) at
+  39.727395, -120.0372941; growth ended ~Aug 13; ~93,733 acres; 100% contained 2026-08-27.
   NISAR GCOV pre: 2026-07-23 02:55 UTC, 2026-07-27 13:01 UTC;
   post: 2026-08-15 13:09 UTC, 2026-08-16 02:55 UTC, 2026-08-20 13:01 UTC.
 - Backups: Ávila (Spain), Le Porge (France), Rowe Creek / Crosswhite (OR). See README.
