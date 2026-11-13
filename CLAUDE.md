@@ -21,8 +21,8 @@ by NISAR since June 2026.
 
 - **Bug Fire, CA/NV (primary)**: ignition 2026-08-08 22:30 UTC (WFIGS discovery) at
   39.727395, -120.0372941; growth ended ~Aug 13; ~93,733 acres; 100% contained 2026-08-27.
-  NISAR GCOV pre: 2026-07-23 02:55 UTC, 2026-07-27 13:01 UTC;
-  post: 2026-08-15 13:09 UTC, 2026-08-16 02:55 UTC, 2026-08-20 13:01 UTC.
+  NISAR GCOV same-track pre/post pairs (compare only within a track, see issue #7):
+  A34 07-22 → 08-15, D42 07-23 → 08-16, A106 07-27 → 08-20 (13:09 / 02:55 / 13:01 UTC).
 - Done (US, branch more-fires): Crosswhite (OR, merged lightning fires, 355,065 ac), Colwash (WA, 39,103 ac in
   < 1 day), Biscar (CA, 69,352 ac). Configs in `src/firedata/config.py`; summary in `docs/fires_summary.md`.
 - Europe later (needs EUMETSAT / LSA SAF accounts; no GOES, FEDS or WFIGS there): Ávila (ES), Le Porge (FR).
