@@ -134,11 +134,18 @@ BISCAR = FireConfig(
     ignition_utc=T("2026-07-18 18:06:09", tz="UTC"),
     start_utc=T("2026-07-18 00:00", tz="UTC"),
     end_utc=T("2026-08-12 00:00", tz="UTC"),
-    # final perimeter (-120.307, 40.549, -119.958, 40.738); WFIGS origin lies ~2 km outside it
+    # final perimeter (-120.307, 40.549, -119.958, 40.738); WFIGS origin lies 6.6 km outside it
     bbox=(-120.65, 40.25, -119.6, 41.05),
     subtitle="Northeastern California, July-August 2026.",
     notes=[
-        "The WFIGS point of origin (40.545702, -120.331628) lies ~2 km outside the final perimeter.",
+        "The WFIGS point of origin (40.545702, -120.331628) lies 6.6 km outside the final perimeter. The first "
+        "detections (VIIRS NOAA-21 2026-07-18 19:57 UTC, GOES-18 20:06 UTC) all sit at ~40.618, -120.300 on the west "
+        "edge of the perimeter, ~8 km from the official origin: very likely the real ignition area. The official point "
+        "is kept in the data; see 'Open questions'.",
+        "95% of the GOES fire energy was released by 2026-07-20 22:56 UTC; VIIRS detections stop on 2026-07-22. "
+        "Because growth ended so early, the 07-22/07-23 NISAR passes already count as post-fire (12-day pairs).",
+        "FEDS splits the fire over three ids (CONUS 64520, 64525, 64741), merged per 12 h step; together they reach only 11% "
+        "of the official area (IoU 10%).",
         "The official perimeter is dated 2026-07-24 but containment was 2026-08-09: growth after Jul 24, "
         "if any, is not in the official perimeter.",
     ],
