@@ -65,14 +65,22 @@ def find_fire_ids(bbox, start_utc, end_utc) -> pd.DataFrame:
                                      max_farea_km2=("farea", "max")).reset_index())
 
 
-def download_feds(fireid: float, raw_dir: Path) -> dict[str, gpd.GeoDataFrame]:
+def download_feds(fireid: float, raw_dir: Path, region: str = "CONUS") -> dict[str, gpd.GeoDataFrame]:
+    """Perimeters, fire lines and new pixels of one FEDS fire. Fire ids repeat across FEDS
+    regions, so the region is part of the key. Empty answers are retried, never cached."""
     raw_dir = Path(raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
     out = {}
     for kind, coll in COLLECTIONS.items():
-        path = raw_dir / f"feds_{kind}_{int(fireid)}.geojson"
+        path = raw_dir / f"feds_{kind}_{region}_{int(fireid)}.geojson"
         if not path.exists():
-            fc = _get_items(coll, {"fireid": fireid})
+            for attempt in range(4):
+                fc = _get_items(coll, {"fireid": fireid, "region": region})
+                if fc["features"]:
+                    break
+                time.sleep(5 * (attempt + 1))
+            if not fc["features"]:
+                raise RuntimeError(f"FEDS returned no {kind} for fireid {fireid} ({region}) after retries")
             path.write_text(json.dumps(fc))
         gdf = gpd.read_file(path)
         if gdf.crs is None:
@@ -95,30 +103,50 @@ def tidy_perimeters(perim: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return g[cols].sort_values("step_utc").reset_index(drop=True)
 
 
-def select_fire_ids(target: gpd.GeoDataFrame, start_utc, end_utc, min_frac: float = 0.2) -> pd.DataFrame:
-    """FEDS fire ids that belong to the target (official) perimeter.
+REGION_PRIORITY = {"CONUS": 0}   # other regions (e.g. BorealNA) rank after CONUS
 
-    FEDS can split one fire into several ids (e.g. Biscar) or track it as one (Bug). An id is
-    kept when at least `min_frac` of its largest perimeter lies inside the official perimeter.
+
+def select_fire_ids(target: gpd.GeoDataFrame, start_utc, end_utc, min_frac: float = 0.2,
+                    dup_overlap: float = 0.5) -> pd.DataFrame:
+    """FEDS fires (fireid, region) that belong to the target (official) perimeter.
+
+    - FEDS can split one fire into several ids (e.g. Biscar) or track it as one (Bug). An id is
+      kept when at least `min_frac` of its largest perimeter lies inside the official perimeter.
+    - The same fire can also appear in two regional runs (e.g. Crosswhite: CONUS 63374 and
+      BorealNA 9744). When two kept fires from different regions overlap each other by more than
+      `dup_overlap` of the smaller one, only the higher-priority region (CONUS) is kept.
     """
     bbox = target.to_crs(4326).total_bounds
     dt = f"{start_utc:%Y-%m-%dT%H:%M:%SZ}/{end_utc:%Y-%m-%dT%H:%M:%SZ}"
     fc = _get_items(COLLECTIONS["perimeter"], {"bbox": ",".join(map(str, bbox)), "datetime": dt})
-    cols = ["fireid", "n_steps", "max_area_km2", "overlap_km2", "frac_inside", "selected"]
+    cols = ["fireid", "region", "n_steps", "max_area_km2", "overlap_km2", "frac_inside", "selected", "reason"]
     if not fc["features"]:
         return pd.DataFrame(columns=cols)
     g = gpd.GeoDataFrame.from_features(fc, crs=4326).to_crs(5070)
     g["a"] = g.area
-    big = g.sort_values("a").groupby("fireid").tail(1).set_index("fireid")
+    key = ["fireid", "region"]
+    big = g.sort_values("a").groupby(key).tail(1).set_index(key)
     tgt = target.to_crs(5070).geometry.union_all()
     out = pd.DataFrame({
-        "fireid": big.index,
-        "n_steps": g.groupby("fireid").size().reindex(big.index).to_numpy(),
+        "fireid": big.index.get_level_values(0), "region": big.index.get_level_values(1),
+        "n_steps": g.groupby(key).size().reindex(big.index).to_numpy(),
         "max_area_km2": (big.a / 1e6).round(2).to_numpy(),
         "overlap_km2": (big.geometry.intersection(tgt).area / 1e6).round(2).to_numpy(),
     })
     out["frac_inside"] = (out.overlap_km2 / out.max_area_km2.where(out.max_area_km2 > 0)).round(3)
     out["selected"] = out.frac_inside >= min_frac
+    out["reason"] = out.selected.map({True: "inside official perimeter", False: f"< {min_frac:.0%} inside"})
+    geoms = big.geometry.to_numpy()
+    out["_prio"] = out.region.map(REGION_PRIORITY).fillna(9)
+    order = out[out.selected].sort_values(["_prio", "overlap_km2"], ascending=[True, False]).index
+    kept: list[int] = []
+    for i in order:
+        dup = next((j for j in kept if out.region[j] != out.region[i] and
+                    geoms[i].intersection(geoms[j]).area > dup_overlap * min(geoms[i].area, geoms[j].area)), None)
+        if dup is None:
+            kept.append(i)
+        else:
+            out.loc[i, ["selected", "reason"]] = [False, f"duplicate of {out.region[dup]} {int(out.fireid[dup])}"]
     return out.sort_values("overlap_km2", ascending=False).reset_index(drop=True)[cols]
 
 
