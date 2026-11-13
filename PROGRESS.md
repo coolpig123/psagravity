@@ -1,19 +1,19 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [██████░░░░░░░░░░] 38%   elapsed 49m / est. total ~5h09m  → ~4h20m left
-Last update: 2026-11-13 12:03 UTC
+Overall: [██████░░░░░░░░░░] 38%   elapsed 50m / est. total ~4h15m  → ~3h25m left
+Last update: 2026-11-13 12:04 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
 |---|---|---|---|---|
 | 1 | Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics) | ✅ | 1h30m | 15m |
-| 2 | Crosswhite (OR) | 🔄 | 1h30m | 5m |
+| 2 | Crosswhite (OR) | 🔄 | 1h30m | 50m |
 | 3 | Colwash (WA) | ✅ | 45m | 25m |
 | 4 | Biscar (CA) | ✅ | 45m | 25m |
 | 5 | Summary file + accuracy % | 🔄 | 1h00m | 15m |
 | 6 | Multi-fire website (tested in a browser) | 🔄 | 1h30m | 20m |
-| 7 | Short README (Hebrew) | ⏳ | 1h00m |  |
+| 7 | Short README (Hebrew) | 🔄 | 1h00m | 10m |
 
 ## Done so far
 
@@ -24,6 +24,7 @@ Last update: 2026-11-13 12:03 UTC
 - Biscar (CA): done. FEDS split over 3 ids (IoU 10%); VIIRS covers 26%, GOES 91%; growth over by ~Jul 21 (95% GOES energy Jul 20 22:56 UTC). 4 NISAR same-track pairs. README + interactive page.
 - Summary (`docs/fires_summary.md` + `.csv`) generated for Bug, Colwash, Biscar with metric definitions; Crosswhite listed as in progress.
 - Multi-fire site in `app/` (fire picker, on-demand data, works from file://). Browser test `scripts/test_app.py` passes for all 3 fires at desktop and phone width. Crosswhite to be added.
+- Root README: short Hebrew overview added at the top (what, data and why, status, numbers per fire, how to run, where things live). Crosswhite numbers pending.
 
 ## Problems / data mismatches
 
@@ -36,6 +37,7 @@ Last update: 2026-11-13 12:03 UTC
 - FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached.
 - Colwash: WFIGS point of origin is ~1.4 km north of the final perimeter.
 - Growth-end rule: when FEDS is too small, the pipeline now uses 95% of GOES fire energy (Colwash: 2026-08-23 04:26 UTC). For Bug the GOES rule would give Aug 11 23:26 vs the FEDS rule's Aug 13 09:30 (Bug keeps the FEDS rule).
+- Crosswhite: first run failed on FEDS (server errors, duplicate region ids); fixed and re-running. GOES download is 36 days, the longest step.
 
 ## Open questions for Ori
 
