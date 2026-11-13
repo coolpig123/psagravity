@@ -32,7 +32,7 @@ class FireConfig:
     start_utc: pd.Timestamp        # data window start
     end_utc: pd.Timestamp          # data window end
     bbox: tuple[float, float, float, float]  # west, south, east, north (search box)
-    feds_fireid: float | None = None
+    feds_fireid: float | None = None   # force one FEDS id; None = all ids overlapping the official perimeter
     goes_end_utc: pd.Timestamp | None = None  # GOES window end (defaults to end_utc)
     nisar_passes_utc: dict[str, list[pd.Timestamp]] = field(default_factory=dict)
     tz_name: str = "PDT"           # local time shown on the web page
@@ -66,7 +66,6 @@ BUG_FIRE = FireConfig(
     # Final WFIGS perimeter is (-120.042, 39.690, -119.709, 39.969); search box adds a margin
     # wide enough to catch neighbouring fires (Stallion, Hawk) so they can be excluded.
     bbox=(-120.6, 39.2, -119.4, 40.3),
-    feds_fireid=69872.0,
     subtitle="California / Nevada, August 2026. Where the fire burned, hour by hour.",
     nisar_passes_utc={
         "pre": [T("2026-07-23 02:55", tz="UTC"), T("2026-07-27 13:01", tz="UTC")],
@@ -75,4 +74,52 @@ BUG_FIRE = FireConfig(
     },
 )
 
-FIRES = {f.slug: f for f in [BUG_FIRE]}
+# Backup / additional US fires (WFIGS facts checked 2026-11-13). Ignition = WFIGS discovery,
+# point = WFIGS point of origin. NISAR passes are looked up from ASF by the pipeline.
+CROSSWHITE = FireConfig(
+    slug="crosswhite",
+    name="Crosswhite Fire, OR",
+    wfigs_name="Crosswhite",          # child of the Rowe Creek Complex (2026-ORPRD-000445)
+    wfigs_min_acres=100000,
+    ignition_lat=44.803333,
+    ignition_lon=-120.199167,
+    ignition_utc=T("2026-07-16 00:51:54", tz="UTC"),
+    start_utc=T("2026-07-15 00:00", tz="UTC"),
+    end_utc=T("2026-08-25 00:00", tz="UTC"),
+    goes_end_utc=T("2026-08-20 00:00", tz="UTC"),
+    # final perimeter (-120.914, 44.338, -120.132, 44.952)
+    bbox=(-121.3, 44.0, -119.75, 45.3),
+    subtitle="Oregon, July-August 2026. Largest fire of the Rowe Creek Complex.",
+)
+
+COLWASH = FireConfig(
+    slug="colwash",
+    name="Colwash Fire, WA",
+    wfigs_name="Colwash",
+    wfigs_min_acres=10000,
+    ignition_lat=46.213617,
+    ignition_lon=-120.120392,
+    ignition_utc=T("2026-08-22 14:58:43", tz="UTC"),
+    start_utc=T("2026-08-22 00:00", tz="UTC"),
+    end_utc=T("2026-08-30 00:00", tz="UTC"),
+    # final perimeter (-120.200, 46.086, -119.756, 46.201)
+    bbox=(-120.55, 45.85, -119.4, 46.45),
+    subtitle="Washington, August 2026. 39,000 acres in under a day.",
+)
+
+BISCAR = FireConfig(
+    slug="biscar",
+    name="Biscar Fire, CA",
+    wfigs_name="Biscar",
+    wfigs_min_acres=10000,
+    ignition_lat=40.545702,
+    ignition_lon=-120.331628,
+    ignition_utc=T("2026-07-18 18:06:09", tz="UTC"),
+    start_utc=T("2026-07-18 00:00", tz="UTC"),
+    end_utc=T("2026-08-12 00:00", tz="UTC"),
+    # final perimeter (-120.307, 40.549, -119.958, 40.738); WFIGS origin lies ~2 km outside it
+    bbox=(-120.65, 40.25, -119.6, 41.05),
+    subtitle="Northeastern California, July-August 2026.",
+)
+
+FIRES = {f.slug: f for f in [BUG_FIRE, CROSSWHITE, COLWASH, BISCAR]}
