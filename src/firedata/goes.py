@@ -26,6 +26,9 @@ FIRE_CODES = {
 }
 # Categories counted in FRP totals (low-probability pixels excluded as noisy).
 FRP_CODES = [10, 11, 12, 13, 14, 30, 31, 32, 33, 34]
+# Schema of the per-day pixel files (used for days with no fire pixels at all).
+PIXEL_DTYPES = {"time_utc": "datetime64[ns, UTC]", "lat": "float64", "lon": "float64", "frp_mw": "float64",
+                "fire_temp_k": "float64", "fire_area_m2": "float64", "mask": "int16", "dqf": "int16"}
 
 
 def _fs():
@@ -143,7 +146,9 @@ def download_goes(bbox, start_utc, end_utc, raw_dir: Path, satellite: str = "goe
                 _read_one(fs, files[0], sub)
             with ThreadPoolExecutor(workers) as ex:
                 res = list(ex.map(lambda p: _read_one(fs, p, sub), files))
-            pix = pd.concat([d for _, d in res if not d.empty], ignore_index=True) if res else pd.DataFrame()
+            found = [d for _, d in res if not d.empty]
+            pix = (pd.concat(found, ignore_index=True) if found else
+                   pd.DataFrame({c: pd.Series(dtype=t) for c, t in PIXEL_DTYPES.items()}))
             scans = pd.DataFrame({"time_utc": [t for t, _ in res], "file": files})
             pix.to_parquet(pix_path)
             scans.to_parquet(scan_path)
