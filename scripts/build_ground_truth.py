@@ -83,7 +83,7 @@ def main():
     frp = process.frp_timeseries(viirs, goes_pts, scans)
     frp.to_csv(proc / "frp_timeseries.csv", index=False)
 
-    growth_end, growth_rule = process.growth_end(perim12, fire, viirs)
+    growth_end, growth_rule = process.growth_end(perim12, fire, viirs, goes_pts)
     print("NISAR (ASF) ...")
     passes = nisar.classify(nisar.search_passes(F.ignition_lon, F.ignition_lat, F.start_utc - pd.Timedelta(days=45),
                                                 F.end_utc + pd.Timedelta(days=45)), discovery, growth_end)
