@@ -27,7 +27,7 @@ by NISAR since June 2026.
   < 1 day), Biscar (CA, 69,352 ac). Configs in `src/firedata/config.py`; summary in `docs/fires_summary.md`.
 - Europe later (needs EUMETSAT / LSA SAF accounts; no GOES, FEDS or WFIGS there): Ávila (ES), Le Porge (FR).
 - Pipeline: `scripts/build_ground_truth.py <fire>`, then `python -m firedata.report readme|summary`,
-  `python -m firedata.web <fires> --app`, browser test `scripts/test_app.py`. Progress: `PROGRESS.md`.
+  `python -m firedata.web <fires> --app`, browser test `scripts/test_app.py`.
 
 ## Layout
 

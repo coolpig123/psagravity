@@ -61,7 +61,6 @@ cp .env.example .env                                        # FIRMS_MAP_KEY (+ E
 | `data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
 | `docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
 | `app/` | האתר |
-| `PROGRESS.md` | מצב העבודה הנוכחי |
 
 </div>
 
