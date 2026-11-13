@@ -1,8 +1,8 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [███░░░░░░░░░░░░░] 19%   elapsed 17m / est. total ~6h32m  → ~6h15m left
-Last update: 2026-11-13 11:32 UTC
+Overall: [███░░░░░░░░░░░░░] 19%   elapsed 25m / est. total ~6h40m  → ~6h15m left
+Last update: 2026-11-13 11:40 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
@@ -28,6 +28,8 @@ Last update: 2026-11-13 11:32 UTC
 - Biscar: WFIGS point of origin is ~2 km outside the final perimeter; the official perimeter is dated Jul 24 but containment was Aug 9.
 - Colwash: official perimeter dated 9.4 h after discovery and never updated.
 - FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²).
+- FEDS: fire ids are not unique across FEDS regions; Crosswhite is tracked twice (CONUS 63374 and BorealNA 9744). Pipeline now keys by (id, region) and keeps CONUS.
+- FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached.
 
 ## Open questions for Ori
 

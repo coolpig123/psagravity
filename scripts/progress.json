@@ -2,13 +2,45 @@
   "started_utc": "2026-11-13T11:15:00+00:00",
   "pr": "",
   "steps": [
-    {"name": "Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics)", "status": "done", "est": 90, "actual": 15},
-    {"name": "Crosswhite (OR)", "status": "running", "est": 90, "actual": 5},
-    {"name": "Colwash (WA)", "status": "running", "est": 45, "actual": 5},
-    {"name": "Biscar (CA)", "status": "running", "est": 45, "actual": 5},
-    {"name": "Summary file + accuracy %", "status": "todo", "est": 60},
-    {"name": "Multi-fire website (tested in a browser)", "status": "todo", "est": 90},
-    {"name": "Short README (Hebrew)", "status": "todo", "est": 60}
+    {
+      "name": "Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics)",
+      "status": "done",
+      "est": 90,
+      "actual": 15
+    },
+    {
+      "name": "Crosswhite (OR)",
+      "status": "running",
+      "est": 90,
+      "actual": 5
+    },
+    {
+      "name": "Colwash (WA)",
+      "status": "running",
+      "est": 45,
+      "actual": 5
+    },
+    {
+      "name": "Biscar (CA)",
+      "status": "running",
+      "est": 45,
+      "actual": 5
+    },
+    {
+      "name": "Summary file + accuracy %",
+      "status": "todo",
+      "est": 60
+    },
+    {
+      "name": "Multi-fire website (tested in a browser)",
+      "status": "todo",
+      "est": 90
+    },
+    {
+      "name": "Short README (Hebrew)",
+      "status": "todo",
+      "est": 60
+    }
   ],
   "done": [
     "Step 0 (PR #6): CLAUDE.md fixed (ignition 22:30 UTC, growth ended ~Aug 13); live page moved to `firedata.web.build_page()`.",
@@ -20,7 +52,9 @@
     "Crosswhite: README said ~343,000 acres = incident size (342,923); the WFIGS perimeter is 355,065 acres. It is a child of the Rowe Creek Complex (373,929 acres). WFIGS has no containment date.",
     "Biscar: WFIGS point of origin is ~2 km outside the final perimeter; the official perimeter is dated Jul 24 but containment was Aug 9.",
     "Colwash: official perimeter dated 9.4 h after discovery and never updated.",
-    "FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²)."
+    "FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²).",
+    "FEDS: fire ids are not unique across FEDS regions; Crosswhite is tracked twice (CONUS 63374 and BorealNA 9744). Pipeline now keys by (id, region) and keeps CONUS.",
+    "FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached."
   ],
   "questions": []
 }
