@@ -18,7 +18,7 @@ Built with `python scripts/build_ground_truth.py biscar` (raw downloads cached i
 
 ## Notes and data mismatches
 
-- The WFIGS point of origin (40.545702, -120.331628) lies 6.6 km outside the final perimeter. The first detections (VIIRS NOAA-21 2026-07-18 19:57 UTC, GOES-18 20:06 UTC) all sit at ~40.618, -120.300 on the west edge of the perimeter, ~8 km from the official origin: very likely the real ignition area. The official point is kept in the data; see 'Open questions'.
+- The WFIGS point of origin (40.545702, -120.331628) lies 6.6 km outside the final perimeter. The first detections (VIIRS NOAA-21 2026-07-18 19:57 UTC, GOES-18 20:06 UTC) all sit at ~40.618, -120.300 on the west edge of the perimeter, ~8 km from the official origin: very likely the real ignition area. The official point is kept in the data. Decision (2026-11-13): the spread model starts Biscar from the first detections (~40.618, -120.300); the official origin stays documented here.
 - 95% of the GOES fire energy was released by 2026-07-20 22:56 UTC; VIIRS detections stop on 2026-07-22. Because growth ended so early, the 07-22/07-23 NISAR passes already count as post-fire (12-day pairs).
 - FEDS splits the fire over three ids (CONUS 64520, 64525, 64741), merged per 12 h step; together they reach only 11% of the official area (IoU 10%).
 - The official perimeter is dated 2026-07-24 but containment was 2026-08-09: growth after Jul 24, if any, is not in the official perimeter.

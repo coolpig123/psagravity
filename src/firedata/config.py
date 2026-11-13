@@ -105,6 +105,8 @@ CROSSWHITE = FireConfig(
         "FEDS reaches 96% of the official area here (IoU 64%), but 280 km² of the FEDS perimeter lies outside the official "
         "perimeter (likely neighbouring complex fires that FEDS tracked as the same fire).",
         "Growth ended ~2026-08-11 (FEDS); post-fire NISAR passes are 36 days after the pre-fire ones on every track.",
+        "Decision (2026-11-13): because of the multiple ignitions, Crosswhite is used for validation only, not calibration.",
+        "`processed/fire_points.csv` is not committed for this fire (size); use `fire_points.parquet`.",
     ],
 )
 
@@ -149,7 +151,8 @@ BISCAR = FireConfig(
         "The WFIGS point of origin (40.545702, -120.331628) lies 6.6 km outside the final perimeter. The first "
         "detections (VIIRS NOAA-21 2026-07-18 19:57 UTC, GOES-18 20:06 UTC) all sit at ~40.618, -120.300 on the west "
         "edge of the perimeter, ~8 km from the official origin: very likely the real ignition area. The official point "
-        "is kept in the data; see 'Open questions'.",
+        "is kept in the data. Decision (2026-11-13): the spread model starts Biscar from the first detections "
+        "(~40.618, -120.300); the official origin stays documented here.",
         "95% of the GOES fire energy was released by 2026-07-20 22:56 UTC; VIIRS detections stop on 2026-07-22. "
         "Because growth ended so early, the 07-22/07-23 NISAR passes already count as post-fire (12-day pairs).",
         "FEDS splits the fire over three ids (CONUS 64520, 64525, 64741), merged per 12 h step; together they reach only 11% "
