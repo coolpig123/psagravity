@@ -1,14 +1,14 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [██████░░░░░░░░░░] 38%   elapsed 50m / est. total ~4h15m  → ~3h25m left
-Last update: 2026-11-13 12:04 UTC
+Overall: [█████████░░░░░░░] 56%   elapsed 1h08m / est. total ~3h53m  → ~2h45m left
+Last update: 2026-11-13 12:22 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
 |---|---|---|---|---|
 | 1 | Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics) | ✅ | 1h30m | 15m |
-| 2 | Crosswhite (OR) | 🔄 | 1h30m | 50m |
+| 2 | Crosswhite (OR) | ✅ | 1h30m | 1h05m |
 | 3 | Colwash (WA) | ✅ | 45m | 25m |
 | 4 | Biscar (CA) | ✅ | 45m | 25m |
 | 5 | Summary file + accuracy % | 🔄 | 1h00m | 15m |
@@ -25,6 +25,7 @@ Last update: 2026-11-13 12:04 UTC
 - Summary (`docs/fires_summary.md` + `.csv`) generated for Bug, Colwash, Biscar with metric definitions; Crosswhite listed as in progress.
 - Multi-fire site in `app/` (fire picker, on-demand data, works from file://). Browser test `scripts/test_app.py` passes for all 3 fires at desktop and phone width. Crosswhite to be added.
 - Root README: short Hebrew overview added at the top (what, data and why, status, numbers per fire, how to run, where things live). Crosswhite numbers pending.
+- Crosswhite (OR): done. FEDS (CONUS 63374) reaches 96% of the official area (IoU 64%); VIIRS covers 83%, GOES 96%; GOES saw the start 11 min before official discovery. 4 NISAR same-track pairs (36-day gaps). README + interactive page (3.7 MB).
 
 ## Problems / data mismatches
 
@@ -38,7 +39,11 @@ Last update: 2026-11-13 12:04 UTC
 - Colwash: WFIGS point of origin is ~1.4 km north of the final perimeter.
 - Growth-end rule: when FEDS is too small, the pipeline now uses 95% of GOES fire energy (Colwash: 2026-08-23 04:26 UTC). For Bug the GOES rule would give Aug 11 23:26 vs the FEDS rule's Aug 13 09:30 (Bug keeps the FEDS rule).
 - Crosswhite: first run failed on FEDS (server errors, duplicate region ids); fixed and re-running. GOES download is 36 days, the longest step.
+- Crosswhite: the official perimeter is a merger of several lightning fires: 9 other WFIGS incidents start inside it (0433 BREWER 70,821 ac, 0512 BOX SPRINGS 21,432 ac, ...). Single-origin metrics (first-detection distance) are only meaningful for the Crosswhite start.
+- Crosswhite geometries: invalid polygons in FEDS/footprint unions crashed overlays; all overlays now repair geometries first (shapely make_valid).
 
 ## Open questions for Ori
 
 - Biscar ignition point: the official WFIGS origin (40.5457, -120.3316) is 6.6 km outside the perimeter; the first VIIRS/GOES detections are at ~40.618, -120.300. Safer choice taken: data keep the official point and the README reports the detection-based point. For the spread model I suggest starting from the detection-based point. Your call.
+- Crosswhite has multiple ignitions (merged fires). For the spread model: treat it as several ignitions (one per merged incident with WFIGS origin and discovery time), or drop it from calibration and keep it for validation only? Safer default taken: data kept as is, README documents the merged incidents.
+- Repo size: Crosswhite processed/ is 38 MB (fire_points.csv with ~81k rows, FEDS GeoJSON with 92 perimeters). Committed as is. Option: commit only Parquet for big fires and drop the CSV. Your call.
