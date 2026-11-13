@@ -20,10 +20,10 @@
 **החלטת ground truth:** שטח = WFIGS הסופי; תזמון = VIIRS + GOES; FEDS = כיוון וצורה בלבד.
 
 ### מה כבר נעשה
-- Pipeline אחד לכל שריפה (`src/firedata/`): הורדה, שיוך detections לשריפה (ומיון שריפות שכנות), טבלאות, גרפים, README לכל שריפה.
+- Pipeline אחד לכל שריפה (`real_fires/src/firedata/`): הורדה, שיוך detections לשריפה (ומיון שריפות שכנות), טבלאות, גרפים, README לכל שריפה.
 - 4 שריפות בארה״ב: Bug (ראשית), Colwash, Biscar, Crosswhite.
-- טבלת סיכום עם אחוזי התאמה מול ה-perimeter הרשמי: [`docs/fires_summary.md`](docs/fires_summary.md).
-- אתר אחד לכל השריפות עם ציר זמן: [`app/index.html`](app/index.html).
+- טבלת סיכום עם אחוזי התאמה מול ה-perimeter הרשמי: [`real_fires/docs/fires_summary.md`](real_fires/docs/fires_summary.md).
+- אתר אחד לכל השריפות עם ציר זמן: [`real_fires/app/index.html`](real_fires/app/index.html).
 - לא נעשה עדיין: השוואת burn scar של NISAR (issue #7), שריפות באירופה, מודל ההתפשטות.
 
 ### המספרים העיקריים
@@ -34,33 +34,34 @@
 | Biscar, CA | 69,352 acres | 10% | 26% | 120 דק׳ | 4 |
 | Crosswhite, OR | 355,065 acres | 64% | 83% | −11 דק׳ (לפני הדיווח) | 4 |
 
-המסקנה: בשריפות מהירות FEDS ו-VIIRS מפספסים חלק גדול מהשטח (Colwash נשרפה בפחות מיום; VIIRS ראה רק 6%). בשריפה ארוכה כמו Crosswhite הם מכסים את רוב השטח. שימו לב: Crosswhite היא איחוד של כמה שריפות ברק (כמה נקודות הצתה). GOES רואה כמעט הכל ומהר, אבל בפיקסלים גסים. לכן משלבים: GOES לזמן, VIIRS למיקום, WFIGS לשטח הסופי. ההגדרות המדויקות של כל אחוז: [`docs/fires_summary.md`](docs/fires_summary.md).
+המסקנה: בשריפות מהירות FEDS ו-VIIRS מפספסים חלק גדול מהשטח (Colwash נשרפה בפחות מיום; VIIRS ראה רק 6%). בשריפה ארוכה כמו Crosswhite הם מכסים את רוב השטח. שימו לב: Crosswhite היא איחוד של כמה שריפות ברק (כמה נקודות הצתה). GOES רואה כמעט הכל ומהר, אבל בפיקסלים גסים. לכן משלבים: GOES לזמן, VIIRS למיקום, WFIGS לשטח הסופי. ההגדרות המדויקות של כל אחוז: [`real_fires/docs/fires_summary.md`](real_fires/docs/fires_summary.md).
 
 ### איך מריצים
 
 </div>
 
 ```bash
+cd real_fires
 uv venv .venv && uv pip install -r requirements.txt -e .   # or: python -m venv .venv
 cp .env.example .env                                        # FIRMS_MAP_KEY (+ Earthdata for NISAR)
 .venv/bin/python scripts/build_ground_truth.py colwash      # one fire: data, tables, figures
 .venv/bin/python -m firedata.report readme colwash          # fire README
 .venv/bin/python -m firedata.report summary bug_fire colwash biscar crosswhite
-.venv/bin/python -m firedata.web bug_fire colwash biscar crosswhite --app   # the site in app/
+.venv/bin/python -m firedata.web bug_fire colwash biscar crosswhite --app   # the site in real_fires/app/
 ```
 
 <div dir="rtl">
 
-הורדה ראשונה של שריפה לוקחת 5–40 דקות (בעיקר GOES). אחר כך הכל מה-cache ב-`data/fires/<fire>/raw/` (לא נשמר ב-git).
+הורדה ראשונה של שריפה לוקחת 5–40 דקות (בעיקר GOES). אחר כך הכל מה-cache ב-`real_fires/data/fires/<fire>/raw/` (לא נשמר ב-git).
 
 ### איפה מה נמצא
 | נתיב | מה |
 |---|---|
-| `src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
-| `scripts/build_ground_truth.py` | מריץ את כל ה-pipeline לשריפה אחת |
-| `data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
-| `docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
-| `app/` | האתר |
+| `real_fires/src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
+| `real_fires/scripts/build_ground_truth.py` | מריץ את כל ה-pipeline לשריפה אחת |
+| `real_fires/data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
+| `real_fires/docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
+| `real_fires/app/` | האתר |
 
 </div>
 
@@ -162,20 +163,23 @@ Progress is tracked in the GitHub project **psagravity tasks**.
 
 ```
 psagravity/
-├── data/fires/<fire>/     # raw / processed data and figures per fire (raw data not committed)
-├── docs/                  # design docs, figures
-├── src/                   # data loading, NISAR processing, spread model
-├── notebooks/             # exploration
-└── app/                   # web map
+├── README.md, CLAUDE.md
+├── docs/                  # project figures (architecture.png)
+└── real_fires/            # ground truth from real fires
+    ├── src/firedata/      # pipeline code (package)
+    ├── scripts/           # build_ground_truth.py, test_app.py
+    ├── data/fires/<fire>/ # processed data, figures, README per fire (raw data not committed)
+    ├── docs/              # fires_summary.md / .csv
+    └── app/               # web map (all fires)
 ```
 
 ## Getting started
 
 ```bash
 git clone https://github.com/coolpig123/psagravity.git
-cd psagravity
+cd psagravity/real_fires
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -e .
 ```
 
 Accounts needed: [NASA Earthdata](https://urs.earthdata.nasa.gov/) (free), FIRMS MAP_KEY (free).
