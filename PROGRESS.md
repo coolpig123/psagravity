@@ -1,15 +1,15 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
 ```
-Overall: [███░░░░░░░░░░░░░] 19%   elapsed 25m / est. total ~6h40m  → ~6h15m left
-Last update: 2026-11-13 11:40 UTC
+Overall: [████░░░░░░░░░░░░] 28%   elapsed 30m / est. total ~6h05m  → ~5h35m left
+Last update: 2026-11-13 11:44 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
 |---|---|---|---|---|
 | 1 | Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics) | ✅ | 1h30m | 15m |
 | 2 | Crosswhite (OR) | 🔄 | 1h30m | 5m |
-| 3 | Colwash (WA) | 🔄 | 45m | 5m |
+| 3 | Colwash (WA) | ✅ | 45m | 25m |
 | 4 | Biscar (CA) | 🔄 | 45m | 5m |
 | 5 | Summary file + accuracy % | ⏳ | 1h00m |  |
 | 6 | Multi-fire website (tested in a browser) | ⏳ | 1h30m |  |
@@ -20,6 +20,7 @@ Last update: 2026-11-13 11:40 UTC
 - Step 0 (PR #6): CLAUDE.md fixed (ignition 22:30 UTC, growth ended ~Aug 13); live page moved to `firedata.web.build_page()`.
 - Issue #7: posted the NISAR track-pairing correction (07-22→08-15 A34, 07-23→08-16 D42, 07-27→08-20 A106).
 - Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers.
+- Colwash (WA): done. VIIRS covers only 6% of the official area; GOES saw the fire 48 min after discovery and covers 100% (coarse pixels); FEDS IoU 3%. 4 NISAR same-track pairs (12-day gaps). README + interactive page.
 
 ## Problems / data mismatches
 
@@ -30,6 +31,8 @@ Last update: 2026-11-13 11:40 UTC
 - FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²).
 - FEDS: fire ids are not unique across FEDS regions; Crosswhite is tracked twice (CONUS 63374 and BorealNA 9744). Pipeline now keys by (id, region) and keeps CONUS.
 - FEDS API is flaky: HTTP 500 on heavy pages and occasional empty answers. Pipeline now shrinks pages and retries; empty answers are not cached.
+- Colwash: WFIGS point of origin is ~1.4 km north of the final perimeter.
+- Growth-end rule: when FEDS is too small, the pipeline now uses 95% of GOES fire energy (Colwash: 2026-08-23 04:26 UTC). For Bug the GOES rule would give Aug 11 23:26 vs the FEDS rule's Aug 13 09:30 (Bug keeps the FEDS rule).
 
 ## Open questions for Ori
 
