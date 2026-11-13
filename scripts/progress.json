@@ -1,0 +1,26 @@
+{
+  "started_utc": "2026-11-13T11:15:00+00:00",
+  "pr": "",
+  "steps": [
+    {"name": "Generalize pipeline (multi-id FEDS, NISAR lookup, growth end, metrics)", "status": "done", "est": 90, "actual": 15},
+    {"name": "Crosswhite (OR)", "status": "running", "est": 90, "actual": 5},
+    {"name": "Colwash (WA)", "status": "running", "est": 45, "actual": 5},
+    {"name": "Biscar (CA)", "status": "running", "est": 45, "actual": 5},
+    {"name": "Summary file + accuracy %", "status": "todo", "est": 60},
+    {"name": "Multi-fire website (tested in a browser)", "status": "todo", "est": 90},
+    {"name": "Short README (Hebrew)", "status": "todo", "est": 60}
+  ],
+  "done": [
+    "Step 0 (PR #6): CLAUDE.md fixed (ignition 22:30 UTC, growth ended ~Aug 13); live page moved to `firedata.web.build_page()`.",
+    "Issue #7: posted the NISAR track-pairing correction (07-22→08-15 A34, 07-23→08-16 D42, 07-27→08-20 A106).",
+    "Pipeline generalized: all FEDS ids overlapping the official perimeter are merged; NISAR passes and same-track pairs from ASF; growth-end rule; per-fire metrics (`firedata.metrics`). Bug Fire re-run: same numbers."
+  ],
+  "problems": [
+    "Branch: `more-fires` is based on `bug-fire-data` (PR #6, not merged) because master has no `src/` yet. The new PR is stacked on #6.",
+    "Crosswhite: README said ~343,000 acres = incident size (342,923); the WFIGS perimeter is 355,065 acres. It is a child of the Rowe Creek Complex (373,929 acres). WFIGS has no containment date.",
+    "Biscar: WFIGS point of origin is ~2 km outside the final perimeter; the official perimeter is dated Jul 24 but containment was Aug 9.",
+    "Colwash: official perimeter dated 9.4 h after discovery and never updated.",
+    "FEDS: Biscar is split over several FEDS ids (max 20 km² each) and Colwash has almost no FEDS area (6 km² of 158 km²)."
+  ],
+  "questions": []
+}
