@@ -191,7 +191,8 @@ def feds_vs_wfigs_map(F: FireConfig, perims: gpd.GeoDataFrame, final: gpd.GeoDat
     w = final.to_crs(EQUAL_AREA)
     fe = perims.iloc[[perims.step_utc.argmax()]].to_crs(EQUAL_AREA)
     wa, fa = w.area.iloc[0] / 1e6, fe.area.iloc[0] / 1e6
-    inter = w.geometry.iloc[0].intersection(fe.geometry.iloc[0]).area / 1e6
+    from .process import valid
+    inter = valid(w.geometry.iloc[0]).intersection(valid(fe.geometry.iloc[0])).area / 1e6
     v = points[points.source.str.startswith("VIIRS")]
 
     fig, ax = plt.subplots(figsize=(8, 7.2))

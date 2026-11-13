@@ -95,8 +95,16 @@ CROSSWHITE = FireConfig(
         "Child incident of the ROWE CREEK COMPLEX (2026-ORPRD-000491, 373,929 acres). The README "
         "listed ~343,000 acres: that is the incident size (342,923); the WFIGS perimeter is 355,065 acres.",
         "WFIGS has no containment or fire-out date for this incident, and the perimeter is dated 2026-08-16.",
-        "Several other complex fires burned next to it (0449 Porcupine Ridge, 0456, 0476 Hoag, 0567 Little Buck); "
+        "Several other complex fires burned next to it (0449 Porcupine Ridge, 0456, 0567 Little Buck, Shingle, Bench, ...); "
         "detections closer to them are excluded.",
+        "Multiple ignitions: 9 other WFIGS incidents start inside the final Crosswhite perimeter, including 0433 BREWER "
+        "(70,821 acres) and 0512 BOX SPRINGS (21,432 acres). The official perimeter is a merger of several lightning fires, "
+        "so 'first detection' metrics are measured against one origin only: the first VIIRS detection (61 km from the "
+        "Crosswhite origin) belongs to another of the merged fires. GOES saw the Crosswhite start 11 min before the "
+        "official discovery, 3.2 km from the origin.",
+        "FEDS reaches 96% of the official area here (IoU 64%), but 280 km² of the FEDS perimeter lies outside the official "
+        "perimeter (likely neighbouring complex fires that FEDS tracked as the same fire).",
+        "Growth ended ~2026-08-11 (FEDS); post-fire NISAR passes are 36 days after the pre-fire ones on every track.",
     ],
 )
 

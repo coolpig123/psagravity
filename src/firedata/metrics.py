@@ -22,7 +22,7 @@ import geopandas as gpd
 import pandas as pd
 
 from .config import FIRES, FireConfig
-from .process import EQUAL_AREA, viirs_footprint
+from .process import EQUAL_AREA, valid, viirs_footprint
 
 DEFINITIONS = {
     "feds_iou": "IoU of the final FEDS perimeter with the official perimeter W: area(FEDS ∩ W) / area(FEDS ∪ W).",
@@ -44,7 +44,7 @@ def _pct(x):
 def compute(F: FireConfig) -> dict:
     P = F.root / "processed"
     s = json.loads((P / "summary.json").read_text())
-    W = gpd.read_file(P / "wfigs_final_perimeter.geojson").to_crs(EQUAL_AREA).geometry.union_all()
+    W = valid(gpd.read_file(P / "wfigs_final_perimeter.geojson").to_crs(EQUAL_AREA).geometry.union_all())
     wa = W.area
     pts = pd.read_parquet(P / "fire_points.parquet")
     if "ambiguous" in pts:
@@ -61,7 +61,7 @@ def compute(F: FireConfig) -> dict:
     if fp.exists():
         f = gpd.read_file(fp)
         f["step_utc"] = pd.to_datetime(f.step_utc, utc=True)
-        feds_geom = f.to_crs(EQUAL_AREA).geometry.iloc[f.step_utc.argmax()]
+        feds_geom = valid(f.to_crs(EQUAL_AREA).geometry.iloc[f.step_utc.argmax()])
         new = f[f.is_new.astype(bool)]
         out["items"]["FEDS"] = {
             "source": "NASA FEDS VIIRS modeled fire perimeters (VEDA OGC API, *_nrt)",
@@ -76,7 +76,7 @@ def compute(F: FireConfig) -> dict:
 
     # VIIRS
     v = pts[pts.source.str.startswith("VIIRS")]
-    vfp = viirs_footprint(v).iloc[0]
+    vfp = valid(viirs_footprint(v).iloc[0])
     first_v = v.loc[v.time_utc.idxmin()]
     fv = gpd.GeoSeries(gpd.points_from_xy([first_v.lon], [first_v.lat]), crs=4326).to_crs(EQUAL_AREA).iloc[0]
     out["items"]["VIIRS"] = {
@@ -96,7 +96,7 @@ def compute(F: FireConfig) -> dict:
         from . import goes
         sat = "goes" + g.source.iloc[0][4:6]
         pix = g.groupby(["lat", "lon"]).size().reset_index()[["lat", "lon"]]
-        gfp = goes.pixel_footprints(pix, satellite=sat, when=g.time_utc.min()).to_crs(EQUAL_AREA).union_all()
+        gfp = valid(goes.pixel_footprints(pix, satellite=sat, when=g.time_utc.min()).to_crs(EQUAL_AREA).union_all())
         first_g = g.loc[g.time_utc.idxmin()]
         fg = gpd.GeoSeries(gpd.points_from_xy([first_g.lon], [first_g.lat]), crs=4326).to_crs(EQUAL_AREA).iloc[0]
         n_scans = int(pd.read_csv(P / "frp_timeseries.csv").source.str.startswith("GOES").sum())
