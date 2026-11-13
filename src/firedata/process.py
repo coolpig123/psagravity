@@ -81,14 +81,20 @@ def viirs_footprint(viirs: pd.DataFrame) -> gpd.GeoSeries:
     return gpd.GeoSeries([gpd.GeoSeries(boxes).union_all()], crs=EQUAL_AREA)
 
 
+def valid(geom):
+    """Repair invalid polygons (self-intersections in large FEDS / footprint unions) before overlays."""
+    import shapely
+    return geom if geom is None or geom.is_valid else shapely.make_valid(geom)
+
+
 def area_comparison(final: gpd.GeoDataFrame, perims: gpd.GeoDataFrame, viirs: pd.DataFrame) -> dict:
-    w = final.to_crs(EQUAL_AREA).geometry.iloc[0]
-    v = viirs_footprint(viirs).iloc[0]
+    w = valid(final.to_crs(EQUAL_AREA).geometry.iloc[0])
+    v = valid(viirs_footprint(viirs).iloc[0])
     km2 = lambda g: round(g.area / 1e6, 2)
     if perims is None or not len(perims):
         return {"wfigs_final_km2": km2(w), "feds_final_km2": None, "viirs_footprint_km2": km2(v),
                 "viirs_footprint_in_wfigs_km2": km2(v.intersection(w))}
-    f = perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()]
+    f = valid(perims.to_crs(EQUAL_AREA).geometry.iloc[perims.step_utc.argmax()])
     return {"wfigs_final_km2": km2(w), "feds_final_km2": km2(f), "overlap_km2": km2(w.intersection(f)),
             "feds_outside_wfigs_km2": km2(f.difference(w)), "wfigs_not_in_feds_km2": km2(w.difference(f)),
             "viirs_footprint_km2": km2(v), "viirs_footprint_in_wfigs_km2": km2(v.intersection(w)),

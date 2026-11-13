@@ -125,7 +125,8 @@ def build_page_data(F: FireConfig, zoom: int = 12) -> dict:
     if mpath.exists() and mpath.stat().st_size > 5:
         m = pd.read_csv(mpath)
         merged = [{"t": mins(pd.Timestamp(r.FireDiscoveryDateTime)), "xy": xy(r.InitialLongitude, r.InitialLatitude),
-                   "acres": int(r.IncidentSize or 0), "name": str(r.IncidentName)} for r in m.itertuples()]
+                   "acres": int(r.IncidentSize or 0), "name": str(r.IncidentName)} for r in m.itertuples()
+                  if (r.IncidentSize or 0) >= 100]   # tiny merged starts only clutter the map
 
     if summary.get("growth_end_utc") not in (None, "None", "NaT"):  # pipeline's rule (FEDS / GOES / VIIRS)
         growth_end = mins(pd.Timestamp(summary["growth_end_utc"]))
