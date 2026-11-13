@@ -53,18 +53,22 @@ def _scan_start(path: str) -> pd.Timestamp:
     return pd.to_datetime(s[:13], format="%Y%j%H%M%S", utc=True)
 
 
+def _scaled(f: h5py.File, name: str) -> np.ndarray:
+    v = f[name]
+    return v[:] * v.attrs["scale_factor"][0] + v.attrs["add_offset"][0]
+
+
 def _latlon_grid(f: h5py.File) -> tuple[np.ndarray, np.ndarray]:
-    """Fixed-grid (x, y radians) -> lat/lon, GOES-R PUG vol. 3 sec. 5.1.2.8."""
+    """Pixel-centre lat/lon of the fixed grid."""
+    return _project(f, *np.meshgrid(_scaled(f, "x"), _scaled(f, "y")))
+
+
+def _project(f: h5py.File, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fixed-grid scan angles (x, y radians) -> lat/lon, GOES-R PUG vol. 3 sec. 5.1.2.8."""
     p = f["goes_imager_projection"].attrs
     H = float(p["perspective_point_height"][0]) + float(p["semi_major_axis"][0])
     a, b = float(p["semi_major_axis"][0]), float(p["semi_minor_axis"][0])
     lon0 = np.deg2rad(float(p["longitude_of_projection_origin"][0]))
-
-    def scaled(name):
-        v = f[name]
-        return v[:] * v.attrs["scale_factor"][0] + v.attrs["add_offset"][0]
-
-    x, y = np.meshgrid(scaled("x"), scaled("y"))
     with np.errstate(invalid="ignore"):
         A = np.sin(x) ** 2 + np.cos(x) ** 2 * (np.cos(y) ** 2 + (a / b) ** 2 * np.sin(y) ** 2)
         B = -2 * H * np.cos(x) * np.cos(y)
@@ -158,6 +162,35 @@ def download_goes(bbox, start_utc, end_utc, raw_dir: Path, satellite: str = "goe
     pix = pd.concat(pix_all, ignore_index=True)
     scans = pd.concat(scans_all, ignore_index=True)
     return pix, scans
+
+
+def pixel_footprints(points: pd.DataFrame, satellite: str = "goes18",
+                     when: pd.Timestamp | None = None) -> "gpd.GeoSeries":
+    """Ground footprint polygon (EPSG:4326) of each GOES fire pixel, from the fixed-grid
+    pixel corners. Pixels near 40N, 120W are ~2.4 x 3.6 km, larger than the nominal 2 km.
+    Not terrain-corrected (no parallax correction)."""
+    import geopandas as gpd
+    from scipy.spatial import cKDTree
+    from shapely.geometry import Polygon
+
+    fs = _fs()
+    # The CONUS fixed grid is constant, so any file of the period gives the geometry.
+    t = when if when is not None else (points.time_utc.min() if "time_utc" in points else None)
+    if t is None:
+        raise ValueError("pass `when` (any time in the data period) or points with a time_utc column")
+    path = next(p for p in list_files(satellite, t.floor("h"), t.floor("h") + pd.Timedelta(hours=1)))
+    with h5py.File(io.BytesIO(fs.cat_file(path)), "r") as f:
+        x, y = _scaled(f, "x"), _scaled(f, "y")
+        lat_c, lon_c = _latlon_grid(f)
+        ok = np.isfinite(lat_c)
+        rows, cols = np.where(ok & (np.abs(lat_c - points.lat.mean()) < 2) & (np.abs(lon_c - points.lon.mean()) < 2))
+        tree = cKDTree(np.c_[lat_c[rows, cols], lon_c[rows, cols]])
+        _, idx = tree.query(np.c_[points.lat, points.lon])
+        r, c = rows[idx], cols[idx]
+        dx, dy = (x[1] - x[0]) / 2, (y[1] - y[0]) / 2
+        corners = [_project(f, x[c] + sx * dx, y[r] + sy * dy) for sx, sy in [(-1, -1), (1, -1), (1, 1), (-1, 1)]]
+    polys = [Polygon([(corners[k][1][i], corners[k][0][i]) for k in range(4)]) for i in range(len(points))]
+    return gpd.GeoSeries(polys, index=points.index, crs=4326)
 
 
 def tidy_goes(pix: pd.DataFrame, satellite: str = "goes18") -> pd.DataFrame:
