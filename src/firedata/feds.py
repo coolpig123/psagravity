@@ -34,20 +34,24 @@ OVERPASS_OFFSET = {0: pd.Timedelta(hours=9, minutes=30), 12: pd.Timedelta(hours=
 
 
 def _get_items(collection: str, params: dict) -> dict:
-    # Small pages: the server returns HTTP 500 for large pages over busy areas.
-    items, url, p = [], f"{API}/collections/{collection}/items", {"limit": 200, **params}
-    while url:
-        for attempt in range(4):
-            r = requests.get(url, params=p, timeout=180)
+    # The server returns HTTP 500 for heavy pages over busy areas (many large polygons), so page
+    # with limit/offset and halve the page size whenever a page keeps failing.
+    url, items, offset, limit = f"{API}/collections/{collection}/items", [], 0, 100
+    while True:
+        for attempt in range(3):
+            r = requests.get(url, params={**params, "limit": limit, "offset": offset}, timeout=180)
             if r.status_code < 500:
                 break
-            time.sleep(5 * (attempt + 1))
+            time.sleep(3 * (attempt + 1))
+        if r.status_code >= 500 and limit > 5:
+            limit = max(5, limit // 2)
+            continue
         r.raise_for_status()
-        j = r.json()
-        items += j.get("features", [])
-        url = next((l["href"] for l in j.get("links", []) if l.get("rel") == "next"), None)
-        p = None
-    return {"type": "FeatureCollection", "features": items}
+        feats = r.json().get("features", [])
+        items += feats
+        if len(feats) < limit:
+            return {"type": "FeatureCollection", "features": items}
+        offset += len(feats)
 
 
 def find_fire_ids(bbox, start_utc, end_utc) -> pd.DataFrame:
