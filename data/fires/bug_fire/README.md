@@ -72,18 +72,35 @@ Findings:
 
 See `figures/feds_vs_wfigs_final.png`.
 
-### Ground truth for calibration (proposal, not applied yet)
+### Does GOES cover the area VIIRS missed?
 
-The 12 h FEDS target is unchanged for now. Proposal:
-- **Final extent: WFIGS final perimeter**, the only source that matches the official size.
-  Cross-check it against the NISAR burn scar (pre 07-27 vs post 08-15/16), which can also
-  show unburned islands inside the perimeter.
-- **Timing: arrival times from VIIRS + GOES detections** (VIIRS 375 m locations, GOES 5 min
-  timing). These give a "burning at time t" observation every few minutes.
-- **FEDS 12 h perimeters as a secondary target:** fine for direction and timing of growth,
-  but a lower bound on area (38% of final), so not for absolute area calibration.
-- Metrics: arrival-time error at detected pixels plus final IoU against WFIGS. Area that
-  was never detected is only constrained by the final perimeter.
+GOES-18 fire-pixel footprints come from `firedata.goes.pixel_footprints`, which uses the
+fixed-grid pixel corners. Here a pixel is 6.8 km² (~2.2 x 3.1 km). Ambiguous pixels are excluded.
+
+| GOES pixels used | Pixels | Footprint | Inside WFIGS | Covers the 201.4 km² gap |
+|---|---|---|---|---|
+| detected in >= 1 scan | 102 | 697.6 km² | 361.5 km² | 188.4 km² (94%) |
+| detected in >= 2 scans | 97 | 663.5 km² | 360.4 km² | 187.7 km² (93%) |
+| detected in >= 6 scans | 80 | 547.1 km² | 336.6 km² | 172.0 km² (85%) |
+
+FEDS ∪ VIIRS ∪ GOES covers 366.4 km² (97%) of the WFIGS perimeter.
+
+Interpretation: almost all of the no-VIIRS gap lies inside a GOES fire pixel, so it was next to
+active fire. GOES cannot show that the gap itself burned: a 6.8 km² pixel fires when a small
+part of it burns, and the GOES footprint (698 km²) is 1.8x the WFIGS area. 336 km² of it is
+outside WFIGS. The NISAR burn-scar check (separate issue) has to settle this.
+
+## Ground truth for calibration (decision)
+
+Decided on 2026-11-13:
+- **Final extent: NIFC WFIGS final perimeter** (`processed/wfigs_final_perimeter.geojson`).
+- **Timing: arrival times from VIIRS + GOES detections** (`processed/fire_points.*`,
+  rows with `ambiguous = False`). VIIRS gives 375 m locations; GOES gives 5 min timing.
+- **FEDS 12 h perimeters: direction and shape only.** Their area is a lower bound (38% of the
+  final size), not an area target.
+
+The 12 h FEDS table is unchanged. Unburned islands inside the WFIGS perimeter and the
+201 km² never detected by VIIRS are to be checked with NISAR (separate issue).
 
 ## Data sources
 
