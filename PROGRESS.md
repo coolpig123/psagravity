@@ -1,8 +1,10 @@
 # Progress: more fires (Crosswhite, Colwash, Biscar) + summary, website, README
 
+**Pull request:** https://github.com/coolpig123/psagravity/pull/8 (stacked on #6, Part of #2)
+
 ```
 Overall: [████████████████] 100%   elapsed 1h10m / est. total ~1h10m  → ~0m left
-Last update: 2026-11-13 12:24 UTC
+Last update: 2026-11-13 12:25 UTC
 ```
 
 | # | Step | Status | Est. | Actual |
@@ -29,6 +31,7 @@ Last update: 2026-11-13 12:24 UTC
 - Summary complete for all 4 fires (`docs/fires_summary.md`, `docs/fires_summary.csv`, 52 rows) with metric definitions and N/A reasons.
 - Site `app/index.html` with all 4 fires; `scripts/test_app.py` passes (no JS errors, map draws, Play and timeline work, no overflow) at desktop and phone width.
 - Root README: Hebrew overview with the numbers for all 4 fires. CLAUDE.md updated.
+- PR #8 opened (stacked on #6). Not merged.
 
 ## Problems / data mismatches
 
