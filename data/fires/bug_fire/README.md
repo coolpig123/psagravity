@@ -18,9 +18,16 @@ Primary study fire. Built with `python scripts/build_ground_truth.py bug_fire`
 | Fire out | 2026-09-21 01:00 UTC | NIFC WFIGS |
 | Merged incident | **Fred Mt** (2026-NVTMFX-030694, 3,482 acres, discovered 2026-08-09 17:33 UTC, origin 39.7755, -119.8471, inside the Bug perimeter) | NIFC WFIGS |
 
-NISAR GCOV passes: pre 2026-07-23 02:55, 2026-07-27 13:01 UTC; post 2026-08-15 13:09,
-2026-08-16 02:55, 2026-08-20 13:01 UTC. All three post passes are after growth ended, so
-they all see the final burn scar.
+NISAR GCOV same-track pre/post pairs (ASF, `processed/nisar_pairs.csv`). Compare only
+within a track; the brief's 07-27 vs 08-15/16 mixes tracks (see issue #7):
+
+| Track | Pre-fire | Post-fire |
+|---|---|---|
+| A34 | 2026-07-22 13:09 UTC | 2026-08-15 13:09 UTC |
+| D42 | 2026-07-23 02:55 UTC | 2026-08-16 02:55 UTC |
+| A106 | 2026-07-27 13:01 UTC | 2026-08-20 13:01 UTC |
+
+All post passes are after growth ended, so they all see the final burn scar.
 
 ### Differences from the original brief
 
