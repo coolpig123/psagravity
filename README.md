@@ -1,5 +1,75 @@
 # psagravity: Wildfire Spread Prediction with NISAR
 
+<div dir="rtl">
+
+## בקצרה (קריאה של 3 דקות)
+
+### מה הפרויקט עושה
+שריפה כבר בוערת: איפה היא תהיה בעוד כמה שעות? נותנים למערכת את נקודת ההצתה והגודל, והיא חוזה את ההתפשטות.
+המודל הוא cellular automaton הסתברותי, שהפרמטרים שלו נלמדים משריפות אמיתיות. השכבות האיטיות (דלק, יובש, אזורים שכבר נשרפו) מגיעות מ-**NISAR** (מכ״ם L-band), והשכבות המהירות מלוויינים שרואים אש כל כמה דקות.
+
+### איזה דאטה ולמה
+| מקור | מה נותן | למה |
+|---|---|---|
+| **NISAR GCOV** (ASF) | backscatter HH/HV, כל 12 יום לכל track | רואה דרך עשן ועננים; דלק, יובש, burn scar |
+| **VIIRS** 375 m (FIRMS) | נקודות אש + FRP, ~6 מעברים ביום | מיקום מדויק של האש |
+| **GOES-18 FDC** (NOAA) | פיקסלי אש + FRP כל 5 דקות, ~7 קמ״ר לפיקסל | תזמון: מתי האש הגיעה לכל מקום |
+| **FEDS** (NASA) | perimeter כל 12 שעות | כיוון וצורת ההתפשטות (השטח הוא חסם תחתון) |
+| **NIFC WFIGS** | ה-perimeter הרשמי הסופי, תאריכים | ground truth לשטח הסופי |
+
+**החלטת ground truth:** שטח = WFIGS הסופי; תזמון = VIIRS + GOES; FEDS = כיוון וצורה בלבד.
+
+### מה כבר נעשה
+- Pipeline אחד לכל שריפה (`src/firedata/`): הורדה, שיוך detections לשריפה (ומיון שריפות שכנות), טבלאות, גרפים, README לכל שריפה.
+- 4 שריפות בארה״ב: Bug (ראשית), Colwash, Biscar, Crosswhite.
+- טבלת סיכום עם אחוזי התאמה מול ה-perimeter הרשמי: [`docs/fires_summary.md`](docs/fires_summary.md).
+- אתר אחד לכל השריפות עם ציר זמן: [`app/index.html`](app/index.html).
+- לא נעשה עדיין: השוואת burn scar של NISAR (issue #7), שריפות באירופה, מודל ההתפשטות.
+
+### המספרים העיקריים
+| שריפה | שטח רשמי | FEDS IoU | VIIRS covers | GOES: איחור בזיהוי ראשון | NISAR pairs |
+|---|---|---|---|---|---|
+| Bug, CA/NV | 93,733 acres | 33% | 39% | 0 דק׳ | 3 |
+| Colwash, WA | 39,103 acres | 3% | 6% | 48 דק׳ | 4 |
+| Biscar, CA | 69,352 acres | 10% | 26% | 120 דק׳ | 4 |
+| Crosswhite, OR | 355,065 acres | בתהליך | בתהליך | בתהליך | בתהליך |
+
+המסקנה: FEDS ו-VIIRS מפספסים חלק גדול מהשטח (בעיקר בריצות מהירות, כמו Colwash, שנשרפה בפחות מיום). GOES רואה כמעט הכל ומהר, אבל בפיקסלים גסים. לכן משלבים: GOES לזמן, VIIRS למיקום, WFIGS לשטח הסופי. ההגדרות המדויקות של כל אחוז: [`docs/fires_summary.md`](docs/fires_summary.md).
+
+### איך מריצים
+
+</div>
+
+```bash
+uv venv .venv && uv pip install -r requirements.txt -e .   # or: python -m venv .venv
+cp .env.example .env                                        # FIRMS_MAP_KEY (+ Earthdata for NISAR)
+.venv/bin/python scripts/build_ground_truth.py colwash      # one fire: data, tables, figures
+.venv/bin/python -m firedata.report readme colwash          # fire README
+.venv/bin/python -m firedata.report summary bug_fire colwash biscar crosswhite
+.venv/bin/python -m firedata.web bug_fire colwash biscar crosswhite --app   # the site in app/
+```
+
+<div dir="rtl">
+
+הורדה ראשונה של שריפה לוקחת 5–40 דקות (בעיקר GOES). אחר כך הכל מה-cache ב-`data/fires/<fire>/raw/` (לא נשמר ב-git).
+
+### איפה מה נמצא
+| נתיב | מה |
+|---|---|
+| `src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
+| `scripts/build_ground_truth.py` | מריץ את כל ה-pipeline לשריפה אחת |
+| `data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
+| `docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
+| `app/` | האתר |
+| `PROGRESS.md` | מצב העבודה הנוכחי |
+
+</div>
+
+---
+
+*Full project description (English) below.*
+
+
 **When a wildfire is already burning, where will it go next?**
 
 psagravity takes the location and size of a fire that has already been detected, and predicts how it will spread over the next hours. It combines the state of the ground from **NASA-ISRO NISAR** L-band radar (fuel, dryness, burned areas) with active-fire detections, terrain and wind.
