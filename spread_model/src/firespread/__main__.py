@@ -21,7 +21,7 @@ def main(argv=None) -> None:
     ap.add_argument("--polygon", help="GeoJSON file / string: the area burning at --start")
     ap.add_argument("--point", nargs=2, type=float, metavar=("LAT", "LON"), help="ignition point")
     ap.add_argument("--inputs", type=Path, help="existing geelayers NetCDF (skips fetching)")
-    ap.add_argument("--nisar", type=Path, help="NetCDF with NISAR layers on the same grid (optional)")
+    ap.add_argument("--nisar", type=Path, help="NetCDF with NISAR layers (crs attr + x/y coords; see README)")
     ap.add_argument("--start", help="UTC time, e.g. 2026-08-09T21:00Z")
     ap.add_argument("--radius-km", type=float, default=5.0)
     ap.add_argument("--res", type=float, default=100.0)

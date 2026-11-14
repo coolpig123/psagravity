@@ -7,9 +7,10 @@
 
 See spread_model/README.md for the formulas.
 """
-from .alexandridis import (DIRECTIONS, NISAR_VARIABLES, AlexandridisParams, p_den, p_mask, p_slope, p_veg,
-                           p_wind, slope_angle_deg, spread_probabilities, summary)
-from .predict import predict
+from .alexandridis import (DIRECTIONS, NISAR_VARIABLES, AlexandridisParams, p_den, p_dry, p_mask, p_slope,
+                           p_veg, p_wind, slope_angle_deg, spread_probabilities, summary)
+from .predict import MODEL_LAYERS, align_nisar, predict
 
-__all__ = ["predict", "spread_probabilities", "summary", "AlexandridisParams", "DIRECTIONS", "NISAR_VARIABLES",
-           "p_veg", "p_den", "p_mask", "p_wind", "p_slope", "slope_angle_deg"]
+__all__ = ["predict", "align_nisar", "spread_probabilities", "summary", "AlexandridisParams", "DIRECTIONS",
+           "NISAR_VARIABLES", "MODEL_LAYERS", "p_veg", "p_den", "p_dry", "p_mask", "p_wind", "p_slope",
+           "slope_angle_deg"]

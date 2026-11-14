@@ -1,19 +1,26 @@
-"""Alexandridis et al. (2008) cellular-automaton spread probability.
+"""Alexandridis et al. (2008) cellular-automaton spread probability, with a NISAR dryness term.
 
 For a burning cell i and each of its 8 neighbours j:
 
-    P(i -> j) = P0 * (1 + P_veg[j]) * (1 + P_den[j]) * P_wind(i -> j) * P_slope(i -> j) * P_mask[j]
+    P(i -> j) = P0 * (1 + P_veg[j]) * (1 + P_den[j]) * (1 + P_dry[j]) * P_wind(i -> j) * P_slope(i -> j)
+                * P_mask[j] * D(i -> j)
 
-clipped to [0, 1]. An unburned cell j catches fire in the next step with probability
-1 - prod_i (1 - P(i -> j)) over its burning neighbours i.
+clipped to [0, 1]. D = 1 for N/E/S/W neighbours and 1/sqrt(2) for diagonal ones (they are sqrt(2) cells
+away; see AlexandridisParams.diagonal_factor). An unburned cell j catches fire in the next step with
+probability 1 - prod_i (1 - P(i -> j)) over its burning neighbours i.
 
-Inputs come from one xarray Dataset on one grid (geelayers.get_fire_inputs), optionally with
-NISAR variables added by the NISAR module on the same grid (see NISAR_VARIABLES).
+Data sources:
+- P_veg, P_mask: Earth Engine (geelayers: LANDFIRE EVC fuel_lifeform, WorldCover landcover)
+- P_wind, P_slope: Earth Engine (geelayers: hourly wind, NASADEM elevation)
+- P_den, P_dry: NISAR only (variables in NISAR_VARIABLES, from the NISAR module). Until they are
+  provided both are 0, i.e. neutral (factor 1).
+
 Everything is numpy array maths on whole grids (no loops over cells), so it can be ported to
 torch / jax as-is to learn the parameters by gradient descent.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -25,20 +32,26 @@ DIRECTIONS = (("N", -1, 0, 0.0), ("NE", -1, 1, 45.0), ("E", 0, 1, 90.0), ("SE", 
               ("S", 1, 0, 180.0), ("SW", 1, -1, 225.0), ("W", 0, -1, 270.0), ("NW", -1, -1, 315.0))
 DIR_NAMES = [d[0] for d in DIRECTIONS]
 
-# Optional variables the NISAR module can add to the Dataset (same grid). Used first when present.
+# What the NISAR module provides (xarray Dataset, dims (y, x), on the inputs grid or regriddable to it:
+# attrs["crs"] + x / y coords in metres). Every variable is optional.
 NISAR_VARIABLES = {
-    "nisar_burned": "1 = already burned (burn scar from NISAR change detection) -> P_mask = 0",
-    "nisar_cover_pct": "vegetation cover %, e.g. from HV backscatter / biomass -> used for P_den instead of LANDFIRE",
+    "nisar_cover_pct": ("%", "vegetation / canopy cover from L-band HV backscatter or biomass -> P_den (only source)"),
+    "nisar_soil_moisture": ("m3/m3", "surface soil moisture (NISAR SME2) -> P_dry (only source)"),
+    "nisar_burned": ("0/1", "1 = already burned (L-band change detection burn scar) -> P_mask = 0"),
 }
 
 # ESA WorldCover classes (geelayers `landcover`)
 WC_NOT_BURNABLE = (50, 60, 70, 80)   # built-up, bare, snow/ice, water
 
+# Weather older than this (relative to the requested time) is flagged in the result
+STALE_WEATHER = pd.Timedelta(hours=2)
+
 
 @dataclass
 class AlexandridisParams:
-    """Model constants. Defaults are the published values (Alexandridis et al. 2008, Spetses fire, 1990);
-    they are the starting point for learning per-region values from real fires."""
+    """Model constants. P0, c1, c2, a, P_veg and P_den values are the published ones (Alexandridis et al.
+    2008, Spetses fire, 1990); P_dry and the diagonal factor are our additions. All are starting points
+    for learning per-region values from real fires."""
     p0: float = 0.58          # P0 (the paper's p_h): spread probability on flat ground, no wind, reference fuel
     c1: float = 0.045         # wind speed term, s/m
     c2: float = 0.131         # wind direction term, s/m
@@ -48,18 +61,36 @@ class AlexandridisParams:
     # fallback when LANDFIRE has no data (outside the US): ESA WorldCover class -> P_veg
     veg_by_worldcover: dict[int, float] = field(default_factory=lambda: {
         10: 0.4, 95: 0.4, 20: 0.0, 30: -0.3, 40: -0.3, 90: -0.3, 100: -0.3})
-    # P_den: paper classes sparse -0.4, normal 0, dense 0.3; split by vegetation cover %
+    # P_den from nisar_cover_pct: paper classes sparse -0.4, normal 0, dense 0.3
     den_sparse: float = -0.4
     den_normal: float = 0.0
     den_dense: float = 0.3
     sparse_below_pct: float = 30.0
     dense_from_pct: float = 60.0
-    # fallback when no cover % at all: NDVI thresholds
-    sparse_below_ndvi: float = 0.3
-    dense_from_ndvi: float = 0.6
+    # P_dry from nisar_soil_moisture (not in the 2008 paper; placeholder values, to be calibrated)
+    dry_dry: float = 0.3          # soil moisture below dry_below_m3m3: drier fuel spreads more
+    dry_normal: float = 0.0
+    dry_wet: float = -0.3         # soil moisture at or above wet_from_m3m3
+    dry_below_m3m3: float = 0.10
+    wet_from_m3m3: float = 0.25
+    # diagonal neighbours are sqrt(2) cells away: same per-step probability would make flat, calm fires
+    # advance sqrt(2) faster along diagonals. 1/sqrt(2) equalises the expected advance per step;
+    # 1.0 reproduces the paper.
+    diagonal_factor: float = 1 / math.sqrt(2)
 
 
-# ---- the five factors ----------------------------------------------------------------------
+# ---- the factors -----------------------------------------------------------------------------
+
+def _classes(values: np.ndarray, low_below: float, high_from: float,
+             low: float, normal: float, high: float) -> tuple[np.ndarray, int]:
+    """Three-class lookup; NaN -> 0 (neutral). Returns (factor, number of NaN cells)."""
+    out = np.full(values.shape, normal, np.float32)
+    known = ~np.isnan(values)
+    out[known & (values < low_below)] = low
+    out[known & (values >= high_from)] = high
+    out[~known] = 0.0
+    return out, int((~known).sum())
+
 
 def p_veg(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
     """P_veg per cell (the cell that would catch fire). Non-burnable cells get 0 here; P_mask removes them."""
@@ -85,27 +116,21 @@ def p_veg(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
 
 
 def p_den(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
-    """P_den per cell from vegetation cover %: sparse / normal / dense."""
-    shape = (ds.sizes["y"], ds.sizes["x"])
-    cover = np.full(shape, np.nan, np.float32)
-    used = []
-    for name in ("nisar_cover_pct", "cover_pct"):
-        if name in ds:
-            v = ds[name].values.astype(np.float32)
-            fill = np.isnan(cover) & ~np.isnan(v)
-            cover[fill] = v[fill]
-            used.append(name)
-    out = np.full(shape, params.den_normal, np.float32)
-    known = ~np.isnan(cover)
-    out[known & (cover < params.sparse_below_pct)] = params.den_sparse
-    out[known & (cover >= params.dense_from_pct)] = params.den_dense
-    if "ndvi" in ds and (~known).any():
-        ndvi = ds["ndvi"].values
-        m = ~known & ~np.isnan(ndvi)
-        out[m & (ndvi < params.sparse_below_ndvi)] = params.den_sparse
-        out[m & (ndvi >= params.dense_from_ndvi)] = params.den_dense
-        used.append("ndvi where no cover %")
-    return out, ", ".join(used) or "none -> normal"
+    """P_den per cell from NISAR vegetation cover % only: sparse / normal / dense. No NISAR -> 0 (neutral)."""
+    if "nisar_cover_pct" not in ds:
+        return np.zeros((ds.sizes["y"], ds.sizes["x"]), np.float32), "nisar_cover_pct not provided -> 0 (neutral)"
+    out, n_nan = _classes(ds["nisar_cover_pct"].values.astype(np.float32), params.sparse_below_pct,
+                          params.dense_from_pct, params.den_sparse, params.den_normal, params.den_dense)
+    return out, "nisar_cover_pct" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
+
+
+def p_dry(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
+    """P_dry per cell from NISAR soil moisture only: dry / normal / wet. No NISAR -> 0 (neutral)."""
+    if "nisar_soil_moisture" not in ds:
+        return np.zeros((ds.sizes["y"], ds.sizes["x"]), np.float32), "nisar_soil_moisture not provided -> 0 (neutral)"
+    out, n_nan = _classes(ds["nisar_soil_moisture"].values.astype(np.float32), params.dry_below_m3m3,
+                          params.wet_from_m3m3, params.dry_dry, params.dry_normal, params.dry_wet)
+    return out, "nisar_soil_moisture" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
 
 
 def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
@@ -158,14 +183,22 @@ def shift(a: np.ndarray, dr: int, dc: int, fill: float = 0.0) -> np.ndarray:
     return out
 
 
-def _at_time(ds: xr.Dataset, time) -> xr.Dataset:
+def _at_time(ds: xr.Dataset, time) -> tuple[xr.Dataset, str]:
+    """Weather step for `time`: the last one at or before it. Returns (snapshot, note)."""
     if "time" not in ds.dims:
-        return ds
+        return ds, ""
     if time is None:
-        return ds.isel(time=0)
+        return ds.isel(time=0), ""
     t = pd.Timestamp(time)
     t = t.tz_convert("UTC").tz_localize(None) if t.tzinfo else t
-    return ds.sel(time=t, method="pad")   # last weather step at or before `time`
+    first, last = pd.Timestamp(ds.time.values[0]), pd.Timestamp(ds.time.values[-1])
+    if t < first:
+        # no weather at or before t: use the first step (it is from after t; flagged)
+        return ds.isel(time=0), f"no weather at or before {t}; used the first step {first} ({first - t} later)"
+    snap = ds.sel(time=t, method="pad")
+    used = pd.Timestamp(snap.time.values)
+    note = f"weather is {t - used} older than the requested time" if t - used > STALE_WEATHER else ""
+    return snap, note
 
 
 def _compass(bearing: float) -> str:
@@ -183,13 +216,13 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     time:    which weather step to use (last one at or before `time`); default the first.
 
     Returns a Dataset with
-      p_veg, p_den, p_mask (y, x)               factors of the cell that would catch fire
+      p_veg, p_den, p_dry, p_mask (y, x)          factors of the cell that would catch fire
       p_wind, p_slope, p_spread (direction, y, x) for the burning cell at (y, x) spreading toward `direction`
-      ignition_prob (y, x)                       chance each unburned cell catches fire in the next step
+      ignition_prob (y, x)                        chance each unburned cell catches fire in the next step
     and attrs summarising the most likely spread direction.
     """
     params = params or AlexandridisParams()
-    snap = _at_time(ds, time)
+    snap, time_note = _at_time(ds, time)
     if burning is None:
         if "initial_burned" not in ds:
             raise ValueError("no burning cells: pass burning=... or a Dataset with initial_burned")
@@ -202,6 +235,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     veg, veg_src = p_veg(snap, params)
     den, den_src = p_den(snap, params)
+    dry, dry_src = p_dry(snap, params)
     mask, mask_src = p_mask(snap, burning)
     if "wind_u_ms" in snap and "wind_v_ms" in snap:
         u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
@@ -217,19 +251,21 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         elev = np.zeros(shape, np.float32)
         slope_src = "no elevation in inputs -> P_slope = 1"
 
-    # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_mask
-    target_factor = params.p0 * (1 + veg) * (1 + den) * mask
+    # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den)(1 + P_dry) P_mask
+    target_factor = params.p0 * (1 + veg) * (1 + den) * (1 + dry) * mask
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)
     ps = np.empty((n, *shape), np.float32)
     p = np.empty((n, *shape), np.float32)
     for k, (_, dr, dc, bearing) in enumerate(DIRECTIONS):
-        dist = res * np.hypot(dr, dc)
+        diagonal = dr != 0 and dc != 0
+        dist = res * (math.sqrt(2) if diagonal else 1.0)
         theta_s = np.nan_to_num(slope_angle_deg(elev, shift(elev, dr, dc, np.nan), dist))
         pw[k] = p_wind(u, v, bearing, params)
         ps[k] = p_slope(theta_s, params)
-        p[k] = shift(target_factor, dr, dc, 0.0) * pw[k] * ps[k]   # neighbour outside the grid -> 0
+        p[k] = (shift(target_factor, dr, dc, 0.0) * pw[k] * ps[k]       # neighbour outside the grid -> 0
+                * (params.diagonal_factor if diagonal else 1.0))
     raw = p.copy()
     np.clip(p, 0.0, 1.0, out=p)
 
@@ -240,19 +276,22 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         no_fire *= 1 - shift(from_burning[k], -dr, -dc, 0.0)
     ignition = (1 - no_fire).astype(np.float32)
 
-    # most likely direction: probability-weighted resultant of the 8 directions over the whole front
-    expected = from_burning.reshape(n, -1).sum(axis=1)             # expected ignitions per direction
+    # most likely direction: resultant of the expected ignitions in the 8 directions over the whole front.
+    # Uses the clipped probabilities, i.e. what the CA actually does (P > 1 cannot ignite more than once).
+    expected = from_burning.reshape(n, -1).sum(axis=1)
     bearings = np.radians([d[3] for d in DIRECTIONS])
     east, north = float((expected * np.sin(bearings)).sum()), float((expected * np.cos(bearings)).sum())
     total = float(expected.sum())
     main_bearing = float(np.degrees(np.arctan2(east, north)) % 360)
     strength = float(np.hypot(east, north) / total) if total > 0 else 0.0
     edge = burning[0].any() or burning[-1].any() or burning[:, 0].any() or burning[:, -1].any()
+    n_spreads = int(((raw > 0) & burning).sum())
+    n_clipped = int(((raw > 1) & burning).sum())
 
     dims2, dims3 = ("y", "x"), ("direction", "y", "x")
     coords = {k: ds.coords[k] for k in ("y", "x", "lat", "lon") if k in ds.coords}
     out = xr.Dataset(
-        {"p_veg": (dims2, veg), "p_den": (dims2, den), "p_mask": (dims2, mask),
+        {"p_veg": (dims2, veg), "p_den": (dims2, den), "p_dry": (dims2, dry), "p_mask": (dims2, mask),
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
          "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
         coords={**coords, "direction": DIR_NAMES})
@@ -260,17 +299,21 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out["ignition_prob"].attrs["description"] = "probability the cell catches fire in the next CA step"
     weather_time = (str(pd.Timestamp(snap["time"].values)) if "time" in snap.coords else "")
     out.attrs.update({
-        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter") if k in ds.attrs},
-        "model": "Alexandridis et al. 2008: P = P0 (1+P_veg)(1+P_den) P_wind P_slope P_mask",
+        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "nisar_alignment")
+           if k in ds.attrs},
+        "model": "Alexandridis et al. 2008 + NISAR dryness: "
+                 "P = P0 (1+P_veg)(1+P_den)(1+P_dry) P_wind P_slope P_mask D (D = 1/sqrt(2) diagonal)",
         "params": repr(params),
         "weather_time_utc": weather_time,
-        "source_p_veg": veg_src, "source_p_den": den_src, "source_p_mask": mask_src,
+        "weather_note": time_note,
+        "source_p_veg": veg_src, "source_p_den": den_src, "source_p_dry": dry_src, "source_p_mask": mask_src,
         "source_p_wind": wind_src, "source_p_slope": slope_src,
         "main_direction_deg": main_bearing, "main_direction": _compass(main_bearing),
         "direction_strength": strength,   # 0 = spreads evenly all round, 1 = all in one direction
         "expected_new_cells": float(ignition.sum()),
         "expected_new_area_km2": float(ignition.sum()) * res * res / 1e6,
-        "n_clipped": int(((raw > 1) & (from_burning > 0)).sum()),   # burning-cell spreads with P > 1 before clipping
+        "n_spreads": n_spreads,            # burning-cell -> neighbour pairs with P > 0
+        "n_clipped": n_clipped,            # ... of which P > 1 before clipping
         "fire_touches_grid_edge": int(edge),
         **{f"expected_{name}": float(e) for name, e in zip(DIR_NAMES, expected)},
     })
@@ -289,8 +332,12 @@ def summary(result: xr.Dataset) -> str:
                  f"{d} {100 * a[f'expected_{d}'] / total:.0f}%" for d in DIR_NAMES)]
     if a.get("weather_time_utc"):
         lines.append(f"Weather used: {a['weather_time_utc']} UTC")
+    if a.get("weather_note"):
+        lines.append(f"WARNING: {a['weather_note']}")
+    lines.append(f"NISAR: density {a['source_p_den']}; dryness {a['source_p_dry']}")
     if a["fire_touches_grid_edge"]:
         lines.append("WARNING: the fire touches the grid edge; spread beyond it is not computed (use a larger radius).")
     if a["n_clipped"]:
-        lines.append(f"Note: {a['n_clipped']} spreads had P > 1 before clipping (strong wind / steep uphill).")
+        lines.append(f"Note: {a['n_clipped']} of {a['n_spreads']} spreads had P > 1 before clipping "
+                     "(strong wind / steep uphill); those directions are saturated.")
     return "\n".join(lines)
