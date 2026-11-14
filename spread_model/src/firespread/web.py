@@ -130,10 +130,13 @@ def no_spread_reason(result: xr.Dataset, min_prob: float = MIN_PROB) -> str:
                                                                                      key=lambda t: -t[1])]
         return "nothing next to the polygon can catch fire: " + ", ".join(parts)
     ok = ring & (result["mask_reason"].values == 0)
-    best = float(np.nanmax(result["ignition_prob"].values[ok]))
+    var = "burn_prob" if "burn_prob" in result else "ignition_prob"
+    best = float(np.nanmax(result[var].values[ok]))
     why = ""
-    if "emc_pct" in result:
-        why = f"; the air keeps fuel moist (equilibrium moisture {np.nanmedian(result['emc_pct'].values[ok]):.0f}%)"
+    if "emc_pct" in result and np.isfinite(result["emc_pct"].values[ok]).any():
+        emc_med = float(np.nanmedian(result["emc_pct"].values[ok]))
+        if emc_med > 15.0:
+            why = f"; the air keeps fuel moist (equilibrium moisture {emc_med:.0f}%)"
     return (f"the cells next to the polygon can burn, but every chance of spreading is below {min_prob:.0%} "
             f"(highest {best:.1%}){why}")
 
