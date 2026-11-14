@@ -42,15 +42,17 @@ to the fire coloured by their chance of catching fire in the next model step (ye
 map: the most likely spread direction, the expected new burned area, and the weather time, NISAR passes and
 Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction.
 
-It takes about 1 minute, and up to about 5 minutes the first time NISAR is read for an area (then it is
-cached in `real_fires/data/nisar_cache`). If the NISAR reader is not installed or the Earthdata login fails, the
-prediction still runs without NISAR and a note says so.
+Expect **4-7 minutes** from pressing Predict to the map (measured on the Bug Fire: 240-401 s; a repeat of the same
+polygon was not faster). The time goes into the Earth Engine inputs (terrain, land cover, 6 hours of weather), the
+Sentinel-2 burn scars and reading NISAR from ASF. If the NISAR reader is not installed or the Earthdata login
+fails, the prediction still runs without NISAR and a note says so.
 
 Request and response format: [spread_model/src/firespread/web.py](../spread_model/src/firespread/web.py).
 Offline tests: `python -m pytest spread_model/tests/test_web.py backend/tests`.
 
 ## Extract Data
 
-**Extract Data** sends the finished polygon to `POST /api/polygon`: the points and the `get_fire_inputs` summary
-print in the `[api]` lines of the terminal. Its start time is 2 days ago (UTC) with 3 hours of weather. Some
-layers cover only the contiguous US.
+**Extract Data** is a debugging tool. It sends the finished polygon to `POST /api/polygon`, and the server prints
+the points and a table of the Earth Engine inputs (`get_fire_inputs`: min / mean / max / % missing per variable)
+in the `[api]` lines of the terminal. It does not run the model or change the map. It ignores the Start box: it
+always uses 2 days before now (UTC) with 3 hours of weather. Some layers cover only the contiguous US.
