@@ -304,6 +304,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
       emc_pct, p_emc, p_dry, p_vwc (y, x)         the parts of p_m (p_m = p_emc * (1 + p_dry) * (1 + p_vwc))
       p_wind, p_slope, p_spread (direction, y, x) for the burning cell at (y, x) spreading toward `direction`
       ignition_prob (y, x)                        chance each unburned cell catches fire in the next step
+      wind_u_ms, wind_v_ms, elevation_m (y, x)    the wind (at `time`) and terrain used
     and attrs summarising the most likely spread direction.
     """
     params = params or AlexandridisParams()
@@ -381,7 +382,9 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
          **{k: (dims2, v) for k, v in moist_parts.items()}, "p_mask": (dims2, mask),
          "mask_reason": (dims2, reason),
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
-         "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
+         "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16)),
+         # the inputs P_wind / P_slope used, kept for later models (survival.py features)
+         "wind_u_ms": (dims2, u), "wind_v_ms": (dims2, v), "elevation_m": (dims2, elev)},
         coords={**coords, "direction": DIR_NAMES})
     out["p_spread"].attrs["description"] = "P(burning cell at (y, x) ignites its neighbour in `direction`), clipped to 1"
     out["ignition_prob"].attrs["description"] = "probability the cell catches fire in the next CA step"
