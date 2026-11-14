@@ -11,14 +11,18 @@ cd ..
 python -m venv backend\.venv
 backend\.venv\Scripts\python -m pip install -r gee_layers\requirements.txt -e gee_layers -e spread_model
 backend\.venv\Scripts\python -m pip install -r real_fires\requirements.txt -e real_fires   # NISAR reader (optional)
-backend\.venv\Scripts\earthengine authenticate          # Google login in the browser
-Copy-Item gee_layers\.env.example gee_layers\.env
-notepad gee_layers\.env                                 # set EE_PROJECT=<your Earth Engine Cloud project id>
 Copy-Item real_fires\.env.example real_fires\.env
-notepad real_fires\.env                                 # Earthdata login, for NISAR (optional)
+notepad real_fires\.env                                 # your own Earthdata login, for NISAR (optional)
 ```
 
 Without `backend\.venv`, the server uses `real_fires\.venv` if that exists.
+
+**Earth Engine needs no file:** the project defaults to the team project (`DEFAULT_PROJECT` in
+[gee_layers/src/geelayers/auth.py](../gee_layers/src/geelayers/auth.py)), and the first Predict opens the Google
+login in the browser (saved for next time). Your Google account must be added to that project once by its owner:
+Google Cloud Console -> IAM -> Grant access, roles **Earth Engine Resource Writer** and **Service Usage Consumer**.
+Without NISAR login the prediction still runs, with a note saying NISAR was skipped. Passwords and keys are never
+committed: everyone uses their own login.
 
 **Every time (one command starts the website and the Python server):**
 

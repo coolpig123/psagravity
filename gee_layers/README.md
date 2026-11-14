@@ -14,13 +14,13 @@ Cell `[i, j]` is the same piece of ground in every variable, so the cellular aut
 cd gee_layers
 python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt -e .
-earthengine authenticate                            # opens a browser, Google login
-cp .env.example .env                                # then set EE_PROJECT=<your Cloud project id>
 pytest                                              # offline tests, no account needed
 ```
 
-`EE_PROJECT` is a Google Cloud project registered for Earth Engine
-(free for non-commercial use: https://code.earthengine.google.com/register).
+The first live call opens the Google login in the browser (or run `earthengine authenticate`). The project defaults
+to the team project (`DEFAULT_PROJECT` in `src/geelayers/auth.py`); its owner adds your Google account in Google
+Cloud Console -> IAM (roles Earth Engine Resource Writer + Service Usage Consumer). To use your own project
+instead (free for non-commercial use: https://code.earthengine.google.com/register), set `EE_PROJECT` in `.env`.
 For a server, set `EE_SERVICE_ACCOUNT_KEY` to a service-account JSON key instead of logging in.
 
 From another part of the repo (e.g. the model code), install it into your own venv:
