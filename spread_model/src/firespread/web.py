@@ -3,14 +3,18 @@
 backend/server.py serves it as POST /api/predict:
 
     body = {"polygon": <GeoJSON>, "start": "2026-08-09T21:00Z",
-            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "steps": 30}
+            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "steps": 30, "arrival": true}
 
     -> {"cells":   GeoJSON FeatureCollection, one square per cell with burn_prob > MIN_PROB: the chance the
-                   cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer,
+                   cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer.
+                   With "arrival" (and a trained model, survival.py) also the cells with p_arrive_48h > MIN_PROB,
+                   and per cell t50 = median hours until the fire arrives, p6 / p12 / p24 / p48 = chance within
+                   6 / 12 / 24 / 48 h (null for cells already burning),
         "bounds":  [west, south, east, north] of the model grid,
         "summary": {main_direction, main_direction_deg, direction_strength, expected_new_area_km2,
                     weather_time_utc, weather_source, nisar_passes_used, nisar_coverage_pct, s2_clear_pct,
-                    s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, max_prob, text, notes}}
+                    s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, max_prob, text, notes,
+                    arrival, arrival_horizons_h, arrival_model, arrival_area_<h>h_km2}}
                    (main_direction / expected_new_area_km2 are for the next single step)
 
 Only the polygon + radius_km is fetched from Earth Engine and NISAR (see predict()).
@@ -26,6 +30,7 @@ import xarray as xr
 from .alexandridis import DIRECTIONS, MASK_REASONS, shift, summary
 from .predict import predict
 from .simulate import DEFAULT_STEPS, simulate_spread
+from .survival import HORIZONS_H, predict_arrival
 
 MIN_PROB = 0.01
 MAX_STEPS = 200
@@ -34,7 +39,10 @@ RES_RANGE_M = (20.0, 1000.0)
 SUMMARY_KEYS = ("main_direction", "main_direction_deg", "direction_strength", "expected_new_area_km2",
                 "expected_new_cells", "time_utc", "weather_time_utc", "weather_source", "weather_note",
                 "nisar_passes_used", "nisar_coverage_pct", "nisar_alignment", "s2_clear_pct", "s2_burned_pct",
-                "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge")
+                "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge",
+                "arrival_model", *(f"arrival_area_{h}h_km2" for h in HORIZONS_H))
+# cell properties for the arrival-time view: median hours + chance within each horizon (survival.py)
+ARRIVAL_PROPS = {"t50": "arrival_h", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
 
 
 def parse_request(body: dict) -> dict:
@@ -65,7 +73,8 @@ def parse_request(body: dict) -> dict:
             "radius_km": number("radius_km", 5.0, 0.1, MAX_RADIUS_KM),
             "res_m": number("res_m", 100.0, *RES_RANGE_M),
             "steps": int(number("steps", DEFAULT_STEPS, 1, MAX_STEPS)),
-            "use_nisar": bool(body.get("use_nisar", True)), "burn_scars": bool(body.get("burn_scars", True))}
+            "use_nisar": bool(body.get("use_nisar", True)), "burn_scars": bool(body.get("burn_scars", True)),
+            "arrival": bool(body.get("arrival", True))}
 
 
 def default_nisar_provider():
@@ -85,11 +94,22 @@ def _guarded(provider, notes: list[str]):
     return get_nisar
 
 
-def cells_geojson(result: xr.Dataset, min_prob: float = MIN_PROB, var: str = "ignition_prob") -> dict:
-    """Cells with `var` > min_prob as lon/lat squares (properties.p), for a MapLibre fill layer."""
+def _prop(v) -> float | None:
+    v = float(v)
+    return round(v, 4) if math.isfinite(v) else None
+
+
+def cells_geojson(result: xr.Dataset, min_prob: float = MIN_PROB, var: str = "ignition_prob",
+                  extra: dict[str, str] | None = None, also_select: tuple[str, ...] = ()) -> dict:
+    """Cells with `var` (or any `also_select` variable) > min_prob as lon/lat squares, for a MapLibre fill layer.
+    properties.p = `var`; `extra` adds more properties {property name: result variable} (NaN -> null)."""
     from pyproj import Transformer
     prob = result[var].values
-    rows, cols = np.nonzero(np.nan_to_num(prob) > min_prob)
+    select = np.nan_to_num(prob) > min_prob
+    for name in also_select:
+        select |= np.nan_to_num(result[name].values) > min_prob
+    rows, cols = np.nonzero(select)
+    extra = {k: result[v].values[rows, cols] for k, v in (extra or {}).items()}
     if rows.size == 0:
         return {"type": "FeatureCollection", "features": []}
     half = float(result.attrs["res_m"]) / 2
@@ -99,9 +119,9 @@ def cells_geojson(result: xr.Dataset, min_prob: float = MIN_PROB, var: str = "ig
     lon, lat = Transformer.from_crs(result.attrs["crs"], 4326, always_xy=True).transform(corners_x, corners_y)
     ring = np.round(np.stack([lon, lat], axis=2), 6).tolist()
     return {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {"p": round(float(p), 4)},
+        {"type": "Feature", "properties": {"p": round(float(p), 4), **{k: _prop(v[i]) for k, v in extra.items()}},
          "geometry": {"type": "Polygon", "coordinates": [r]}}
-        for r, p in zip(ring, prob[rows, cols])]}
+        for i, (r, p) in enumerate(zip(ring, np.nan_to_num(prob[rows, cols])))]}
 
 
 def _bounds(result: xr.Dataset) -> list[float]:
@@ -150,7 +170,8 @@ def _plain(v):
     return str(v)
 
 
-def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nisar_provider) -> dict:
+def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nisar_provider,
+                    arrival_fn=predict_arrival) -> dict:
     """POST /api/predict: request body -> response dict. ValueError for a bad request."""
     req = parse_request(body)
     notes: list[str] = []
@@ -166,11 +187,20 @@ def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nis
     if result.attrs.get("sim_reached_grid_edge"):
         notes.append(f"the simulated fire reached the edge of the {req['radius_km']:g} km area around the polygon; "
                      "spread beyond it is not computed (use fewer steps or a larger radius)")
-    cells = cells_geojson(result, var="burn_prob")
+    arrival = False
+    if req["arrival"]:
+        try:
+            result = arrival_fn(result, req["start"])
+            arrival = True
+        except (FileNotFoundError, ImportError, ValueError) as e:   # no trained model, xgboost not installed
+            notes.append(f"arrival times skipped: {e}")
+    cells = (cells_geojson(result, var="burn_prob", extra=ARRIVAL_PROPS, also_select=(f"p_arrive_{HORIZONS_H[-1]}h",))
+             if arrival else cells_geojson(result, var="burn_prob"))
     if not cells["features"]:
         notes.append("No spread on the map: " + no_spread_reason(result))
     prob = result["burn_prob"].values
     info = {k: _plain(result.attrs[k]) for k in SUMMARY_KEYS if k in result.attrs}
     info.update({"n_cells": len(cells["features"]), "max_prob": _plain(np.nanmax(prob)) if prob.size else None,
-                 "text": summary(result), "notes": notes})
+                 "text": summary(result), "notes": notes, "arrival": arrival,
+                 "arrival_horizons_h": list(HORIZONS_H) if arrival else []})
     return {"cells": cells, "bounds": _bounds(result), "summary": info}

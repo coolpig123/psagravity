@@ -28,7 +28,7 @@ def fake_predict(seen):
 def test_parse_request_defaults_and_errors():
     req = parse_request(BODY)
     assert req == {"polygon": POLYGON, "start": "2026-08-09T21:00:00+00:00", "radius_km": 5.0, "res_m": 100.0,
-                   "steps": 30, "use_nisar": True, "burn_scars": True}
+                   "steps": 30, "use_nisar": True, "burn_scars": True, "arrival": True}
     assert parse_request({**BODY, "steps": 5})["steps"] == 5
     with pytest.raises(ValueError):
         parse_request({**BODY, "steps": 0})
@@ -42,7 +42,7 @@ def test_parse_request_defaults_and_errors():
 
 def test_predict_payload_calls_predict_and_returns_map_cells():
     seen = {}
-    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False, "steps": 3},
+    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False, "steps": 3, "arrival": False},
                           predict_fn=fake_predict(seen), nisar_factory=lambda: (lambda request: None))
     assert seen["polygon"] == POLYGON and seen["start"] == "2026-08-09T21:00:00+00:00"
     assert seen["radius_km"] == 3.0 and seen["res_m"] == 100.0 and seen["burn_scars"] is False
