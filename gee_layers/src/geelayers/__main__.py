@@ -48,13 +48,13 @@ def main(argv=None) -> None:
     _area_args(p, 100.0)
     p.add_argument("--time", help="UTC time the prediction starts, e.g. 2026-08-08T22:30Z")
     p.add_argument("--layers", default=",".join(DEFAULT_LAYERS))
-    p.add_argument("--weather-source", default="rtma", choices=list(WEATHER))
+    p.add_argument("--weather-source", default="rtma", choices=[*WEATHER, "auto"])
 
     p = sub.add_parser("weather", help="hourly weather time series")
     _area_args(p, 1000.0)
     p.add_argument("--start", required=True)
     p.add_argument("--end", required=True)
-    p.add_argument("--source", default="rtma", choices=list(WEATHER))
+    p.add_argument("--source", default="rtma", choices=[*WEATHER, "auto"])
     p.add_argument("--step-hours", type=int, default=1)
     p.add_argument("--issued", help="gfs only: use the latest run issued at or before this time")
 
@@ -67,7 +67,7 @@ def main(argv=None) -> None:
     p.add_argument("--weather-res", type=float, default=1000.0, help="coarse cell size (m) for weather before regridding")
     p.add_argument("--step-hours", type=int, default=1)
     p.add_argument("--layers", default=",".join(DEFAULT_LAYERS))
-    p.add_argument("--weather-source", default="rtma", choices=list(WEATHER))
+    p.add_argument("--weather-source", default="rtma", choices=[*WEATHER, "auto"])
     p.add_argument("--issued", help="gfs only: use the latest run issued at or before this time")
     p.add_argument("--perimeter-time-key", help="property dating each feature of a perimeter time series "
                                                 "(default: auto, e.g. obs_time_utc for FEDS)")

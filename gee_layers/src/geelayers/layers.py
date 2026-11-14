@@ -98,8 +98,9 @@ def _latest_before(col: ee.ImageCollection, t: pd.Timestamp, lookback: pd.Timede
 # ---- static / snapshot layers ---------------------------------------------------------------
 
 def _terrain(region, t):
-    img = ee.Image("NASA/NASADEM_HGT/001").select("elevation").resample("bilinear").rename("elevation_m")
-    return img, {}
+    nasadem = ee.Image("NASA/NASADEM_HGT/001").select("elevation").resample("bilinear")
+    gmted = ee.Image("USGS/GMTED2010_FULL").select("be75").resample("bilinear")
+    return nasadem.unmask(gmted).rename("elevation_m"), {}
 
 
 def _landcover(region, t):
