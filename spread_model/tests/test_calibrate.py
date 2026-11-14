@@ -19,6 +19,20 @@ def test_first_burn_step_rings_and_no_spread():
     assert (none[:, start] == 0).all() and (none[:, ~start] == 32767).all()
 
 
+def test_first_burn_step_spotting_jumps_downwind():
+    start = np.zeros((N, N), bool)
+    start[C, C] = True
+    never = np.zeros((8, N, N), np.float32)                # no neighbour spread: only firebrands
+    ones = np.ones((N, N), np.float32)
+    spot = {"launch": ones, "ignite": ones, "dist_m": ones * 300.0, "dir_deg": ones * 90.0,   # toward the east
+            "min_m": 300.0, "max_m": 300.0, "cone_deg": 0.0, "res_m": 100.0}
+    first = first_burn_step(never, start, max_steps=1, runs=4, spot=spot)
+    assert (first[:, C, C + 3] == 1).all()                 # 300 m east, in every run
+    assert ((first == 1).sum(axis=(1, 2)) == 1).all()      # and nowhere else
+    spot["dir_deg"] = ones * 0.0                           # toward the north = up the rows
+    assert (first_burn_step(never, start, 1, runs=2, spot=spot)[:, C - 3, C] == 1).all()
+
+
 def test_soft_iou():
     t = np.zeros((4, 4), bool)
     t[:2] = True
