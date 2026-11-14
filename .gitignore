@@ -1,6 +1,7 @@
 **/.env
 real_fires/data/**/raw/
 gee_layers/data/
+spread_model/data/
 .venv/
 __pycache__/
 *.pyc
