@@ -302,6 +302,111 @@ def test_scar_change_is_averaged_over_neighbours():
     assert np.isfinite(npv.hv_change_db(hv, hv_ref, 3)).all()
 
 
+def test_backfill_from_older_passes(tmp_path):
+    """Newest pass sees only the east half; the west half comes from an older pass, all variables from it."""
+    g = model_grid(radius_km=2.0)
+    mid = g.x0 + g.width * g.res / 2
+    newest = write_gcov(tmp_path / "a34.h5", g, hv_db=-14, x_range=(mid, g.x0 + g.width * g.res + 600))
+    older = write_gcov(tmp_path / "d42.h5", g, hv_db=-18)
+    oldest = write_gcov(tmp_path / "a106.h5", g, hv_db=-10)
+    sme2_new = write_sme2(tmp_path / "s_a34.h5", g, sm=0.05, vwc=0.3)
+    sme2_old = write_sme2(tmp_path / "s_d42.h5", g, sm=0.20, vwc=5.0)
+    search = fake_search([
+        ("GCOV", "2026-07-27T13:01Z", "A106", 22, oldest),
+        ("GCOV", "2026-08-04T02:55Z", "D42", 68, older),
+        ("GCOV", "2026-08-08T13:09Z", "A34", 21, newest),
+        ("SME2", "2026-08-04T02:55Z", "D42", 68, sme2_old),
+        ("SME2", "2026-08-08T13:09Z", "A34", 21, sme2_new),
+    ])
+    ds = npv.nisar_provider(search=search, cache_dir=None, detect_scars=False)(Request(g))
+    assert ds.attrs["nisar_coverage_pct"] == 100.0
+    assert ds.attrs["nisar_pass_utc"].startswith("2026-08-08") and ds.attrs["nisar_track"] == "A34"
+    used = ds.attrs["nisar_passes_used"]
+    assert "A34" in used and "D42" in used and "A106" not in used     # stopped once covered
+    east, west = g.x > mid + 100, g.x < mid - 100
+    cover = ds["nisar_cover_pct"].values
+    assert np.allclose(cover[:, east], npv.cover_from_hv(np.array([10 ** -1.4]))[0])
+    assert np.allclose(cover[:, west], npv.cover_from_hv(np.array([10 ** -1.8]))[0])
+    # a cell takes radar AND SME2 from the same pass
+    assert np.allclose(ds["nisar_soil_moisture"].values[:, east], 0.05)
+    assert np.allclose(ds["nisar_soil_moisture"].values[:, west], 0.20)
+    assert np.allclose(ds["nisar_vwc_kg_m2"].values[:, west], 5.0)
+    assert (ds["nisar_burned"].values != -1).all()
+    detail = __import__("json").loads(ds.attrs["nisar_passes_detail"])
+    assert [d["track"] for d in detail] == ["A34", "D42"] and sum(d["cells_pct"] for d in detail) == pytest.approx(100)
+
+
+def test_full_coverage_reads_only_the_newest_pass(tmp_path):
+    g = model_grid()
+    full = write_gcov(tmp_path / "full.h5", g)
+    search = fake_search([("GCOV", "2026-08-01T13:00Z", "D42", 68, tmp_path / "missing.h5"),   # would fail if read
+                          ("GCOV", "2026-08-08T13:00Z", "A34", 21, full)])
+    ds = npv.nisar_provider(search=search, cache_dir=None, detect_scars=False)(Request(g))
+    assert ds.attrs["nisar_passes_used"].count("%") == 1 and ds.attrs["nisar_coverage_pct"] == 100.0
+
+
+def test_partial_coverage_kept_when_no_older_pass(tmp_path):
+    g = model_grid()
+    mid = g.x0 + g.width * g.res / 2
+    half = write_gcov(tmp_path / "half.h5", g, x_range=(mid, g.x0 + g.width * g.res + 600))
+    ds = npv.nisar_provider(search=fake_search([("GCOV", "2026-08-08T13:00Z", "A34", 21, half)]),
+                            cache_dir=None, detect_scars=False)(Request(g))
+    assert 40 < ds.attrs["nisar_coverage_pct"] < 60
+    west = g.x < mid - 100
+    assert (ds["nisar_burned"].values[:, west] == -1).all()      # unknown, never "burned"
+
+
+def test_earthdata_login_once_per_process(monkeypatch):
+    import types
+    import earthaccess
+    import fsspec
+    logins = {"n": 0}
+    monkeypatch.setattr(earthaccess, "login", lambda **k: logins.__setitem__("n", logins["n"] + 1))
+    monkeypatch.setattr(earthaccess, "__store__",
+                        types.SimpleNamespace(auth=types.SimpleNamespace(token={"access_token": "t"})), raising=False)
+    monkeypatch.setattr(fsspec, "filesystem", lambda *a, **k: object())
+    na._https_filesystem.cache_clear()
+    fs1, fs2 = na._https_filesystem(), na._https_filesystem()
+    assert fs1 is fs2 and logins["n"] == 1
+    na._https_filesystem.cache_clear()                           # what a failed read does before retrying
+    na._https_filesystem()
+    assert logins["n"] == 2
+    na._https_filesystem.cache_clear()
+
+
+def test_compute_burned_mask_no_data_is_minus_one():
+    from firedata.nisar_layers import compute_burned_mask
+    hh = np.array([10 ** -0.9, 10 ** -2.5, np.nan, 10 ** -0.9], np.float32)
+    hv = np.array([10 ** -1.5, 10 ** -3.0, 1.0, np.nan], np.float32)
+    burned, combustible = compute_burned_mask(hh, hv)
+    assert burned.tolist() == [0, 1, -1, -1] and combustible.tolist() == [1, 0, -1, -1]
+
+
+def test_build_nisar_inputs_script(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "scripts" / "build_nisar_inputs.py"
+    spec = importlib.util.spec_from_file_location("build_nisar_inputs", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    seen = {}
+
+    def fake_provider(**kw):
+        def get(request):
+            seen["time"], seen["crs"] = request.time_utc, request.crs
+            import xarray as xr
+            return xr.Dataset({"nisar_cover_pct": (("y", "x"), np.full((len(request.y), len(request.x)), 20.0))},
+                              coords={"y": request.y, "x": request.x},
+                              attrs={"crs": request.crs, "nisar_passes_used": "x", "nisar_coverage_pct": 100.0})
+        return get
+    monkeypatch.setattr(mod, "nisar_provider", fake_provider)
+    out = tmp_path / "bug.nc"
+    monkeypatch.setattr(sys, "argv", ["build_nisar_inputs.py", "bug_fire", "--radius-km", "2", "--out", str(out)])
+    mod.main()
+    assert out.exists() and seen["time"].startswith("2026-08-08T22:30")      # pre = ignition time
+
+
 def test_no_data_stays_no_data():
     hh = np.array([10 ** -0.9, 10 ** -2.5, np.nan], np.float32)
     hv = np.array([10 ** -1.5, 10 ** -3.0, 1.0], np.float32)

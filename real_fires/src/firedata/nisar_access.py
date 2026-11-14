@@ -15,6 +15,7 @@ the spread model's NisarRequest qualifies.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -152,10 +153,13 @@ READ_TIMEOUT_S = 120      # a byte-range request with no data for this long is a
 READ_ATTEMPTS = 3
 
 
+@functools.lru_cache(maxsize=1)
 def _https_filesystem():
     """fsspec HTTPS filesystem with the Earthdata bearer token (as earthaccess builds it) plus timeouts.
 
-    earthaccess.get_fsspec_https_session() has no timeout, so one stalled connection hangs forever.
+    Built once per process (one Earthdata login); read_layers drops it after a network error so the retry
+    starts on a fresh session. earthaccess.get_fsspec_https_session() has no timeout, so one stalled
+    connection would hang forever.
     """
     import aiohttp
     import earthaccess
@@ -265,6 +269,7 @@ def read_layers(source: str | Path, group: str, datasets: list[str], grid: Targe
                 raise
             log.warning("NISAR read of %s failed (%s), retry %d/%d", Path(str(source)).name, e, attempt,
                         READ_ATTEMPTS - 1)
+            _https_filesystem.cache_clear()     # fresh session (and token) for the retry
     if key is not None:
         key.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(key, **out)
