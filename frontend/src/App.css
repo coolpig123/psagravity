@@ -70,7 +70,7 @@ html, body, #root { margin: 0; height: 100%; }
   margin: 0 6px;
   vertical-align: middle;
   border-radius: 2px;
-  background: linear-gradient(to right, #ffe66d, #ff9f1c 35%, #e4572e 70%, #9d0208);
+  background: linear-gradient(to right, #ffd23f, #ff9f1c 25%, #f3722c 50%, #d62828 75%, #6a040f);
 }
 
 .area {

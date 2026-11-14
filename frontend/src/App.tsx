@@ -27,6 +27,9 @@ type Prediction = {
     nisar_coverage_pct?: number
     s2_clear_pct?: string
     s2_burned_pct?: string
+    sim_steps?: number
+    sim_expected_area_km2?: number
+    sim_reached_grid_edge?: number
     n_cells: number
     max_prob: number | null
     notes: string[]
@@ -159,16 +162,21 @@ function App() {
         filter: ['==', ['geometry-type'], 'Point'],
         paint: { 'circle-color': COLOR, 'circle-radius': 5 },
       })
-      // Predicted ignition probability per cell: yellow -> orange -> red, under the polygon outline.
+      // Chance each cell burns within the simulated steps: yellow -> orange -> red, under the polygon outline.
+      // Low chances are drawn lighter, so the likely path stands out.
       map.addSource('prediction', { type: 'geojson', data: EMPTY })
+      const ramp: maplibregl.ExpressionSpecification = [
+        'interpolate', ['linear'], ['get', 'p'], 0, '#ffd23f', 0.25, '#ff9f1c', 0.5, '#f3722c', 0.75, '#d62828', 1, '#6a040f',
+      ]
       map.addLayer(
         {
           id: 'prediction-fill',
           type: 'fill',
           source: 'prediction',
           paint: {
-            'fill-color': ['interpolate', ['linear'], ['get', 'p'], 0, '#ffe66d', 0.35, '#ff9f1c', 0.7, '#e4572e', 1, '#9d0208'],
-            'fill-opacity': 0.8,
+            'fill-color': ramp,
+            'fill-outline-color': ramp, // no light seams between neighbouring cells
+            'fill-opacity': ['interpolate', ['linear'], ['get', 'p'], 0, 0.45, 0.3, 0.75, 1, 0.9],
           },
         },
         'polygon-line',
@@ -247,6 +255,11 @@ function App() {
   useEffect(() => {
     const source = mapRef.current?.getSource<maplibregl.GeoJSONSource>('prediction')
     source?.setData(prediction ? prediction.cells : EMPTY)
+    // Zoom to the predicted area so it is easy to see.
+    if (prediction && prediction.cells.features.length) {
+      const [w, s, e, n] = prediction.bounds
+      mapRef.current?.fitBounds([[w, s], [e, n]], { padding: 30, duration: 800 })
+    }
   }, [prediction, loaded])
 
   // Clearing or redrawing the polygon removes the prediction and ignores one still on its way.
@@ -361,7 +374,8 @@ ${err instanceof Error ? err.message : err}`)
                 ? 'no spread expected (nothing around the polygon can burn)'
                 : `${s.main_direction} (${s.main_direction_deg?.toFixed(0)}°), strength ${s.direction_strength?.toFixed(2)}`}
               {' · '}
-              <b>Expected new burned area:</b> {s.expected_new_area_km2?.toFixed(2)} km² next step ({s.n_cells} cells at risk)
+              <b>Expected new burned area:</b> {s.sim_expected_area_km2?.toFixed(1)} km² within {s.sim_steps} steps
+              {' '}({s.n_cells} cells at risk; {s.expected_new_area_km2?.toFixed(2)} km² in the next step)
             </p>
             <p>
               <b>Weather:</b> {s.weather_time_utc || 'none'} UTC{s.weather_source ? ` (${s.weather_source})` : ''}
@@ -376,7 +390,7 @@ ${err instanceof Error ? err.message : err}`)
               <p key={i} className="note">Note: {note}</p>
             ))}
             <p className="legend">
-              Ignition probability <span className="ramp" /> 0 → 1
+              Chance of burning within {s.sim_steps} steps (one step = up to one 100 m cell) <span className="ramp" /> 0 → 1
             </p>
           </>
         )}

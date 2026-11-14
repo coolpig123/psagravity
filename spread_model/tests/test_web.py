@@ -28,7 +28,10 @@ def fake_predict(seen):
 def test_parse_request_defaults_and_errors():
     req = parse_request(BODY)
     assert req == {"polygon": POLYGON, "start": "2026-08-09T21:00:00+00:00", "radius_km": 5.0, "res_m": 100.0,
-                   "use_nisar": True, "burn_scars": True}
+                   "steps": 30, "use_nisar": True, "burn_scars": True}
+    assert parse_request({**BODY, "steps": 5})["steps"] == 5
+    with pytest.raises(ValueError):
+        parse_request({**BODY, "steps": 0})
     for bad in ({"start": "2026-08-09T21:00Z"},                              # no polygon
                 {"polygon": POLYGON},                                         # no start
                 {**BODY, "start": "yesterday-ish"},
@@ -39,14 +42,15 @@ def test_parse_request_defaults_and_errors():
 
 def test_predict_payload_calls_predict_and_returns_map_cells():
     seen = {}
-    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False},
+    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False, "steps": 3},
                           predict_fn=fake_predict(seen), nisar_factory=lambda: (lambda request: None))
     assert seen["polygon"] == POLYGON and seen["start"] == "2026-08-09T21:00:00+00:00"
     assert seen["radius_km"] == 3.0 and seen["res_m"] == 100.0 and seen["burn_scars"] is False
     assert callable(seen["nisar"])
 
     cells = out["cells"]["features"]
-    assert len(cells) == 8 == out["summary"]["n_cells"]            # the 8 neighbours of the burning centre cell
+    assert 8 < len(cells) <= 48 and len(cells) == out["summary"]["n_cells"]   # beyond the first ring, within 3 steps
+    assert out["summary"]["sim_steps"] == 3 and out["summary"]["sim_expected_area_km2"] > 0
     ring = cells[0]["geometry"]["coordinates"][0]
     assert len(ring) == 5 and ring[0] == ring[-1]
     assert all(-180 <= lon <= 180 and -90 <= lat <= 90 for lon, lat in ring)
@@ -77,8 +81,9 @@ def test_predict_payload_without_nisar_and_when_nisar_fails():
     def broken(request):
         raise RuntimeError("Earthdata login failed")
     out = predict_payload(BODY, predict_fn=fake_predict(seen), nisar_factory=lambda: broken)
-    assert out["summary"]["notes"] == ["NISAR skipped: RuntimeError: Earthdata login failed"]   # still predicts
-    assert out["summary"]["n_cells"] == 8
+    assert out["summary"]["notes"][0] == "NISAR skipped: RuntimeError: Earthdata login failed"   # still predicts
+    assert out["summary"]["n_cells"] > 0
+    assert any("edge" in n for n in out["summary"]["notes"])        # 30 steps on an 11-cell grid reach the edge
 
 
 def test_cells_geojson_positions_and_empty():
