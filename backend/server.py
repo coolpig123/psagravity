@@ -7,6 +7,12 @@ POST /api/polygon   body: GeoJSON Feature with a Polygon geometry ([lon, lat] or
                     Prints the polygon's points, runs gee_layers.get_fire_inputs on it
                     and prints a short summary of the result.
                     Optional properties: "start" (ISO time, UTC) and "hours" (default: see below).
+
+POST /api/predict   body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z", "radius_km": 5, "res_m": 100,
+                    "use_nisar": true, "burn_scars": true}
+                    Runs the spread model (firespread.predict) on the polygon + radius_km only and returns the
+                    ignition-probability cells as GeoJSON plus a summary; see spread_model/src/firespread/web.py.
+                    Needs spread_model (and real_fires for NISAR) in the venv; see frontend/README.md.
 """
 
 import json
@@ -17,10 +23,14 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VENV = Path(__file__).resolve().parent / ".venv"
-VENV_PYTHON = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+_PY = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+_ROOT = Path(__file__).resolve().parents[1]
+# backend/.venv, or real_fires/.venv (which has gee_layers, the spread model and the NISAR reader) if there is none
+VENV = next((v for v in (_ROOT / "backend" / ".venv", _ROOT / "real_fires" / ".venv") if (v / _PY).exists()),
+            _ROOT / "backend" / ".venv")
+VENV_PYTHON = VENV / _PY
 
-# Re-run inside backend/.venv if started with another Python (e.g. plain `python` from npm run dev).
+# Re-run inside that venv if started with another Python (e.g. plain `python` from npm run dev).
 if __name__ == "__main__" and VENV_PYTHON.exists() and Path(sys.prefix).resolve() != VENV.resolve():
     sys.exit(subprocess.call([str(VENV_PYTHON), __file__, *sys.argv[1:]]))
 
@@ -28,7 +38,11 @@ import numpy as np  # noqa: E402  (after the venv switch)
 import pandas as pd  # noqa: E402
 from geelayers import get_fire_inputs  # noqa: E402
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+# The spread model and the NISAR reader, straight from the repo when they are not pip-installed in this venv.
+for _pkg in ("spread_model", "real_fires"):
+    sys.path.append(str(_ROOT / _pkg / "src"))
+
+DEFAULT_PORT = 8000
 # The UI has no time picker yet: default to a recent window whose data already exists on Earth Engine
 # (RTMA weather can be ~13 h late, gridMET 2-3 days; gridMET looks back up to 7 days).
 DEFAULT_LAG_HOURS = 48
@@ -86,8 +100,33 @@ def run_fire_inputs(feature: dict):
     return ds
 
 
+def run_predict(body: dict) -> dict:
+    """POST /api/predict: the spread model on the drawn polygon. ValueError = bad request."""
+    from firespread.web import predict_payload   # imported here so /api/polygon works without the spread model
+    print(f"\nRunning predict(start={body.get('start')}, radius_km={body.get('radius_km', 5)}, "
+          f"use_nisar={body.get('use_nisar', True)}, burn_scars={body.get('burn_scars', True)}) ...", flush=True)
+    t0 = time.time()
+    out = predict_payload(body)
+    print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_cells']} cells on the map")
+    print(out["summary"]["text"])
+    for note in out["summary"]["notes"]:
+        print(f"NOTE: {note}")
+    sys.stdout.flush()
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
+        if self.path == "/api/predict":
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                self._reply(200, run_predict(body))
+            except ValueError as e:      # bad JSON, missing polygon / start, numbers out of range
+                self._reply(400, {"error": f"bad request: {e}"})
+            except Exception as e:       # Earth Engine login, data not available yet, area too large, ...
+                print(f"\npredict failed: {type(e).__name__}: {e}", flush=True)
+                self._reply(500, {"error": f"predict failed: {type(e).__name__}: {e}"})
+            return
         if self.path != "/api/polygon":
             self._reply(404, {"error": "not found"})
             return
@@ -121,8 +160,9 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")  # so "km²" prints on Windows terminals
-    print(f"API server on http://localhost:{PORT}  (Ctrl+C to stop)", flush=True)
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    print(f"API server on http://localhost:{port}  (Ctrl+C to stop)", flush=True)
     try:
-        ThreadingHTTPServer(("localhost", PORT), Handler).serve_forever()
+        ThreadingHTTPServer(("localhost", port), Handler).serve_forever()
     except KeyboardInterrupt:
         pass

@@ -38,6 +38,13 @@ python -m firespread --inputs ../gee_layers/data/bug_bundle.nc --nisar nisar.nc 
 vegetation_cover and weather (wind, temp_c, rh_pct). It skips Sentinel-2 `vegetation` and gridMET `fuel_dryness`.
 It also adds Sentinel-2 burn scars (below); turn them off with `burn_scars=False` / `--no-burn-scars`.
 
+### Web app
+
+[web.py](src/firespread/web.py) turns a request from the map UI (`{polygon, start, radius_km, res_m, use_nisar,
+burn_scars}`) into a prediction and a JSON answer: the cells with `ignition_prob > 0.01` as GeoJSON squares plus a
+summary. [backend/server.py](../backend/server.py) serves it as `POST /api/predict`; how to start the website and
+the server is in [frontend/README.md](../frontend/README.md).
+
 ### Burn scars from Sentinel-2 (dNBR)
 
 [burn_scars.py](src/firespread/burn_scars.py) marks cells that already burned, so P_mask = 0 there:

@@ -124,5 +124,7 @@ def attach_nisar(inputs: xr.Dataset, nisar: NisarInput) -> xr.Dataset:
         raise TypeError(f"nisar must be an xarray Dataset, a NetCDF path or a provider function, got {type(nisar)}")
     aligned, how = align_nisar(nisar, inputs)
     inputs = inputs.assign({v: aligned[v] for v in aligned.data_vars})
+    # what the NISAR module says about its data (passes used, coverage, ...) travels with the inputs
+    inputs.attrs.update({k: v for k, v in nisar.attrs.items() if k.startswith("nisar_")})
     inputs.attrs["nisar_alignment"] = how
     return inputs

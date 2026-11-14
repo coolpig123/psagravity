@@ -8,6 +8,30 @@ type Mode = 'idle' | 'drawing' | 'locked'
 
 const COLOR = '#e4572e'
 const MAX_AREA_KM2 = 400 // above this the area is shown in red
+const DEFAULT_START = '2026-08-09T21:00Z' // Bug Fire, first afternoon: easy to test with
+const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
+
+// Answer of POST /api/predict (spread_model/src/firespread/web.py).
+type Prediction = {
+  cells: GeoJSON.FeatureCollection // one square per cell, properties.p = ignition probability
+  bounds: [number, number, number, number]
+  summary: {
+    main_direction?: string
+    main_direction_deg?: number
+    direction_strength?: number
+    expected_new_area_km2?: number
+    weather_time_utc?: string
+    weather_source?: string
+    weather_note?: string
+    nisar_passes_used?: string
+    nisar_coverage_pct?: number
+    s2_clear_pct?: string
+    s2_burned_pct?: string
+    n_cells: number
+    max_prob: number | null
+    notes: string[]
+  }
+}
 
 // Area of the closed polygon on the Earth's surface, in km² (spherical formula, as in Turf.js).
 function areaKm2(points: Point[]): number {
@@ -88,6 +112,11 @@ function App() {
   modeRef.current = mode
   const pointsRef = useRef(points)
   pointsRef.current = points
+  const [start, setStart] = useState(DEFAULT_START) // UTC time the prediction starts
+  const [prediction, setPrediction] = useState<Prediction | null>(null)
+  const [predicting, setPredicting] = useState(false)
+  const [error, setError] = useState('')
+  const requestId = useRef(0) // answers of older requests (polygon cleared or redrawn meanwhile) are dropped
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -130,6 +159,20 @@ function App() {
         filter: ['==', ['geometry-type'], 'Point'],
         paint: { 'circle-color': COLOR, 'circle-radius': 5 },
       })
+      // Predicted ignition probability per cell: yellow -> orange -> red, under the polygon outline.
+      map.addSource('prediction', { type: 'geojson', data: EMPTY })
+      map.addLayer(
+        {
+          id: 'prediction-fill',
+          type: 'fill',
+          source: 'prediction',
+          paint: {
+            'fill-color': ['interpolate', ['linear'], ['get', 'p'], 0, '#ffe66d', 0.35, '#ff9f1c', 0.7, '#e4572e', 1, '#9d0208'],
+            'fill-opacity': 0.8,
+          },
+        },
+        'polygon-line',
+      )
       setLoaded(true)
     })
 
@@ -200,7 +243,22 @@ function App() {
     if (mapRef.current) mapRef.current.getCanvas().style.cursor = mode === 'drawing' ? 'crosshair' : ''
   }, [mode, loaded])
 
+  // Show the prediction cells (or nothing) on the map.
+  useEffect(() => {
+    const source = mapRef.current?.getSource<maplibregl.GeoJSONSource>('prediction')
+    source?.setData(prediction ? prediction.cells : EMPTY)
+  }, [prediction, loaded])
+
+  // Clearing or redrawing the polygon removes the prediction and ignores one still on its way.
+  const dropPrediction = () => {
+    requestId.current++
+    setPrediction(null)
+    setPredicting(false)
+    setError('')
+  }
+
   const draw = () => {
+    dropPrediction()
     setPoints([])
     setHistory([])
     setMode('drawing')
@@ -212,6 +270,7 @@ function App() {
     setHistory((h) => h.slice(0, -1))
   }
   const clear = () => {
+    dropPrediction()
     setPoints([])
     setHistory([])
     setMode('idle')
@@ -240,6 +299,31 @@ ${err instanceof Error ? err.message : err}`)
     }
   }
 
+  // Run the spread model on the finished polygon: the server fetches only the data around it.
+  const predict = async () => {
+    const id = ++requestId.current
+    setPrediction(null)
+    setError('')
+    setPredicting(true)
+    try {
+      const res = await fetch('/api/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ polygon: toGeoJSON(points, 'locked'), start: start.trim() }),
+      })
+      if (res.status === 503) throw new Error('The Python server is not running. Start everything with: npm run dev')
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error ?? `The server answered ${res.status}`)
+      if (id === requestId.current) setPrediction(data as Prediction)
+    } catch (err) {
+      if (id === requestId.current) setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (id === requestId.current) setPredicting(false)
+    }
+  }
+
+  const s = prediction?.summary
+
   return (
     <div className="page">
       <div className="toolbar">
@@ -248,6 +332,17 @@ ${err instanceof Error ? err.message : err}`)
         <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}>Undo</button>
         <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}>Clear</button>
         <button onClick={extract} disabled={mode !== 'locked'}>Extract Data</button>
+        <label className="start">
+          Start (UTC)
+          <input value={start} onChange={(e) => setStart(e.target.value)} placeholder={DEFAULT_START} size={18} />
+        </label>
+        <button
+          className="predict"
+          onClick={predict}
+          disabled={mode !== 'locked' || area > MAX_AREA_KM2 || predicting || !start.trim()}
+        >
+          {predicting ? 'Predicting…' : 'Predict'}
+        </button>
         {mode !== 'idle' && (
           <span className={`area ${area > MAX_AREA_KM2 ? 'too-big' : 'ok'}`}>
             {area.toLocaleString('en-US', { maximumFractionDigits: 1 })} km²
@@ -255,6 +350,37 @@ ${err instanceof Error ? err.message : err}`)
         )}
       </div>
       <div ref={container} className="map" />
+      <div className="panel">
+        {predicting && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}
+        {error && <p className="error">Prediction failed: {error}</p>}
+        {s && (
+          <>
+            <p>
+              <b>Most likely spread:</b>{' '}
+              {s.n_cells === 0
+                ? 'no spread expected (nothing around the polygon can burn)'
+                : `${s.main_direction} (${s.main_direction_deg?.toFixed(0)}°), strength ${s.direction_strength?.toFixed(2)}`}
+              {' · '}
+              <b>Expected new burned area:</b> {s.expected_new_area_km2?.toFixed(2)} km² next step ({s.n_cells} cells at risk)
+            </p>
+            <p>
+              <b>Weather:</b> {s.weather_time_utc || 'none'} UTC{s.weather_source ? ` (${s.weather_source})` : ''}
+              {' · '}
+              <b>NISAR:</b>{' '}
+              {s.nisar_passes_used ? `${s.nisar_passes_used}, covers ${s.nisar_coverage_pct?.toFixed(0)}%` : 'not used'}
+              {' · '}
+              <b>Burn scars (Sentinel-2):</b>{' '}
+              {s.s2_clear_pct !== undefined ? `${s.s2_burned_pct}% burned, ${s.s2_clear_pct}% clear view` : 'not used'}
+            </p>
+            {[s.weather_note, ...s.notes].filter(Boolean).map((note, i) => (
+              <p key={i} className="note">Note: {note}</p>
+            ))}
+            <p className="legend">
+              Ignition probability <span className="ramp" /> 0 → 1
+            </p>
+          </>
+        )}
+      </div>
     </div>
   )
 }
