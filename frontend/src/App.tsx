@@ -219,6 +219,27 @@ function App() {
 
   const area = areaKm2(points)
 
+  // Send the finished polygon to the Python server, which prints its points.
+  const extract = async () => {
+    const feature: GeoJSON.Feature = {
+      type: 'Feature',
+      properties: { area_km2: area },
+      geometry: { type: 'Polygon', coordinates: [[...points, points[0]]] },
+    }
+    try {
+      const res = await fetch('/api/polygon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(feature),
+      })
+      if (res.status === 503) throw new Error('The Python server is not running. Start everything with: npm run dev')
+      if (!res.ok) throw new Error(`The server answered ${res.status}: ${await res.text()}`)
+    } catch (err) {
+      alert(`Could not send the polygon.
+${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   return (
     <div className="page">
       <div className="toolbar">
@@ -226,6 +247,7 @@ function App() {
         <button onClick={finish} disabled={mode !== 'drawing' || points.length < 3}>Finish</button>
         <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}>Undo</button>
         <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}>Clear</button>
+        <button onClick={extract} disabled={mode !== 'locked'}>Extract Data</button>
         {mode !== 'idle' && (
           <span className={`area ${area > MAX_AREA_KM2 ? 'too-big' : 'ok'}`}>
             {area.toLocaleString('en-US', { maximumFractionDigits: 1 })} km²
