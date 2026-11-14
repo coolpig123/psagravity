@@ -7,9 +7,10 @@ probabilistic cellular automaton of Alexandridis et al. (2008), plus a fuel-mois
 Inputs come from two places:
 - **Earth Engine** ([`gee_layers`](../gee_layers/README.md)): terrain, vegetation type, land cover, and hourly
   wind, temperature and humidity. They are fetched only around the fire.
-- **NISAR** (the NISAR module, in progress): vegetation density, soil moisture and burn scars.
+- **NISAR** (`real_fires/src/firedata/nisar_provider.py`): vegetation density, soil moisture, vegetation water
+  content and burn scars, read from NASA's GCOV and SME2 products over the area around the fire only.
 
-Until the NISAR data arrives, its terms are neutral (factor 1).
+Without NISAR data (no pass, or `nisar` not given), its terms are neutral (factor 1).
 
 ## Use it
 
@@ -54,14 +55,14 @@ burning neighbours, which gives `ignition_prob`.
 | **P_den** | lookup by vegetation cover % of *j* | sparse (< 30 %) **−0.4**, normal **0**, dense (≥ 60 %) **+0.3**; no data → **0** | **NISAR only**: `nisar_cover_pct` |
 | **P_w** | `exp(c1·V) · exp(c2·V·(cos θ − 1))` | V = wind speed (m/s) at *i*; θ = angle between the direction the wind blows **toward** and *i → j*; c1 = 0.045, c2 = 0.131 s/m | GEE: hourly wind |
 | **P_s** | `exp(a·θs)`, `θs = atan((E_j − E_i) / l)` | E = elevation (m); l = cell size, × √2 for diagonals; θs in degrees (> 0 uphill); a = 0.078 /deg | GEE: NASADEM |
-| **P_m** | `P_emc · (1 + P_dry)` | fuel moisture, see below | GEE hourly + NISAR |
+| **P_m** | `P_emc · (1 + P_dry) · (1 + P_vwc)` | fuel moisture, see below | GEE hourly + NISAR |
 | **P_mask** | 1 or 0 | 0 if *j* cannot burn: burning now, no fuel, WorldCover built-up / bare / snow / water, NISAR burn scar, or outside the grid | GEE + NISAR `nisar_burned` |
 | **D** | 1 or 1/√2 | 1 for N/E/S/W, **1/√2 for diagonals** (they are √2 cells away; equal expected advance per step) | ours |
 
-### P_m: fuel moisture (fast air moisture × slow ground moisture)
+### P_m: fuel moisture (fast air moisture × slow ground and vegetation moisture)
 
 ```
-P_m(j, t) = P_emc(j, t) · (1 + P_dry[j])
+P_m(j, t) = P_emc(j, t) · (1 + P_dry[j]) · (1 + P_vwc[j])
 ```
 
 **P_emc** is how dry the fine dead fuel is right now. It comes from the hourly air temperature and humidity
@@ -84,13 +85,19 @@ P_emc < 1. Missing weather, or a cell with no weather, gives 1.
 **P_dry** is how dry the ground is. It comes from NISAR soil moisture (`nisar_soil_moisture`, SME2): dry
 (< 0.10 m³/m³) gives **+0.3**, normal **0**, wet (≥ 0.25) **−0.3**. Without NISAR it is **0**.
 
-The output keeps every part: `emc_pct`, `p_emc`, `p_dry` and `p_m`. `attrs["source_p_m"]` and the summary say
-which sources were used.
+**P_vwc** is how much water the live vegetation holds. It comes from NISAR vegetation water content
+(`nisar_vwc_kg_m2`, SME2): low (< 0.5 kg/m², e.g. cured grass or dry shrub) gives **+0.2**, normal **0**, high
+(≥ 4 kg/m², well-watered live canopy) **−0.2**. Without NISAR it is **0**. VWC also grows with the amount of
+vegetation, so it partly overlaps P_veg and P_den. That's why its effect is kept small until it is calibrated.
+
+The output keeps every part: `emc_pct`, `p_emc`, `p_dry`, `p_vwc` and `p_m`. `attrs["source_p_m"]` and the
+summary say which sources were used.
 
 ### Parameters
 
 - **From the paper** (fitted on a 1990 fire in Greece): P0, c1, c2, a, P_veg and P_den.
-- **Our additions, placeholders to fit later:** P_m (`b_emc`, `emc_ref_pct`, the P_dry thresholds and ±0.3) and D.
+- **Our additions, placeholders to fit later:** P_m (`b_emc`, `emc_ref_pct`, the P_dry and P_vwc thresholds and
+  values) and D.
 
 All of them are in `AlexandridisParams`, so they can be learned from our fires. `diagonal_factor=1.0` gives back
 the paper's original model.
@@ -134,7 +141,18 @@ def get_nisar(request: NisarRequest):
 |---|---|---|---|
 | `nisar_cover_pct` | % | vegetation / canopy cover from HV backscatter or biomass | P_den |
 | `nisar_soil_moisture` | m³/m³ | surface soil moisture (SME2) | P_dry, inside P_m |
+| `nisar_vwc_kg_m2` | kg/m² | vegetation water content (SME2, PMI retrieval) | P_vwc, inside P_m |
 | `nisar_burned` | 0/1 (integer) | already burned, from L-band change detection | P_mask = 0 |
+
+**The provider that exists today** is `firedata.nisar_provider.nisar_provider()` (in `real_fires/`):
+
+```python
+from firedata.nisar_provider import nisar_provider
+result = predict(polygon=drawn_geojson, start="2026-08-09T21:00Z", nisar=nisar_provider())
+```
+
+It needs Earthdata credentials in `real_fires/.env`. What it does is described at the top of
+[nisar_provider.py](../real_fires/src/firedata/nisar_provider.py).
 
 Every variable is optional. Use NaN (float) or −1 (integer) for no data.
 

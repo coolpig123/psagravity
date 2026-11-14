@@ -9,11 +9,11 @@
 See spread_model/README.md for the formulas and nisar.py for the NISAR contract.
 """
 from .alexandridis import (DIRECTIONS, AlexandridisParams, p_den, p_dry, p_emc, p_mask, p_moisture, p_slope,
-                           p_veg, p_wind, simard_emc, slope_angle_deg, spread_probabilities, summary)
+                           p_veg, p_vwc, p_wind, simard_emc, slope_angle_deg, spread_probabilities, summary)
 from .nisar import NISAR_VARIABLES, NisarRequest, align_nisar, attach_nisar, nisar_template
 from .predict import MODEL_LAYERS, predict
 
 __all__ = ["predict", "spread_probabilities", "summary", "AlexandridisParams", "DIRECTIONS", "MODEL_LAYERS",
            "NISAR_VARIABLES", "NisarRequest", "nisar_template", "align_nisar", "attach_nisar",
-           "p_veg", "p_den", "p_dry", "p_emc", "p_moisture", "p_mask", "p_wind", "p_slope",
+           "p_veg", "p_den", "p_dry", "p_vwc", "p_emc", "p_moisture", "p_mask", "p_wind", "p_slope",
            "simard_emc", "slope_angle_deg"]

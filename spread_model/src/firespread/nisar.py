@@ -29,6 +29,7 @@ import xarray as xr
 NISAR_VARIABLES: dict[str, tuple[str, str]] = {
     "nisar_cover_pct": ("%", "vegetation / canopy cover from L-band HV backscatter or biomass -> P_den (only source)"),
     "nisar_soil_moisture": ("m3/m3", "surface soil moisture (NISAR SME2) -> P_dry, the slow part of P_m (only source)"),
+    "nisar_vwc_kg_m2": ("kg/m2", "vegetation water content (NISAR SME2, PMI retrieval) -> P_vwc, part of P_m (only source)"),
     "nisar_burned": ("0/1", "1 = already burned (L-band change detection burn scar) -> P_mask = 0 (integer dtype)"),
 }
 
