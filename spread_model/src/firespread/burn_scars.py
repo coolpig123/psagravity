@@ -59,6 +59,20 @@ def _grid_of(inputs: xr.Dataset):
     return Grid(int(crs.split(":")[1]), float(x[0] - res / 2), float(y[0] + res / 2), res, x.size, y.size)
 
 
+def _fine_grid(grid):
+    """The 20 m grid nested in `grid` (to average to the model cells), or None if not usable.
+
+    None when the model cells are not a whole multiple (>= 2) of 20 m, or when the 20 m grid (k^2 times more
+    cells) would exceed geelayers' MAX_CELLS, e.g. a polygon drawn > ~80 km wide at 100 m.
+    """
+    from geelayers import Grid
+    from geelayers.fetch import MAX_CELLS
+    k = int(round(grid.res / NATIVE_RES_M))
+    if k < 2 or abs(grid.res / k - NATIVE_RES_M) > 1e-6 or grid.width * grid.height * k * k > MAX_CELLS:
+        return None
+    return Grid(grid.epsg, grid.x0, grid.y0, grid.res / k, grid.width * k, grid.height * k)
+
+
 def _nbr_images(region, t: pd.Timestamp):
     import ee
     ms = lambda ts: int(ts.timestamp() * 1000)  # noqa: E731
@@ -101,12 +115,10 @@ def optical_burn_scars(inputs: xr.Dataset, time=None, threshold: float = DNBR_TH
     if dnbr_img is None:
         out.attrs["s2_burn_scars"] = "skipped: no Sentinel-2 scenes in the current or reference window"
         return out
-    k = int(round(grid.res / NATIVE_RES_M))
-    if k >= 2 and abs(grid.res / k - NATIVE_RES_M) < 1e-6:
-        from geelayers import Grid
-        fine = Grid(grid.epsg, grid.x0, grid.y0, grid.res / k, grid.width * k, grid.height * k)
-        dnbr = _block_mean(download(dnbr_img, fine, ["dnbr"])[0], k)
-    else:
+    fine = _fine_grid(grid)
+    if fine is not None:
+        dnbr = _block_mean(download(dnbr_img, fine, ["dnbr"])[0], fine.width // grid.width)
+    else:      # already ~20 m, not a multiple of 20 m, or the 20 m grid would be too big: sample at model cells
         dnbr = download(dnbr_img, grid, ["dnbr"])[0]
     out["s2_dnbr"] = (("y", "x"), dnbr.astype(np.float32), {"units": "1", "long_name": "Sentinel-2 dNBR"})
     out["s2_burned"] = (("y", "x"), scars_from_dnbr(dnbr, threshold),
