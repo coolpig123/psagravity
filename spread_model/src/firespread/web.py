@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .alexandridis import summary
+from .alexandridis import DIRECTIONS, MASK_REASONS, shift, summary
 from .predict import predict
 from .simulate import DEFAULT_STEPS, simulate_spread
 
@@ -114,6 +114,30 @@ def _bounds(result: xr.Dataset) -> list[float]:
     return [round(float(v), 6) for v in (lon.min(), lat.min(), lon.max(), lat.max())]
 
 
+def no_spread_reason(result: xr.Dataset, min_prob: float = MIN_PROB) -> str:
+    """Why nothing shows on the map: what the cells right next to the fire are, or how small their chances are."""
+    burning = result["burning"].values.astype(bool)
+    ring = np.zeros_like(burning)
+    for _, dr, dc, _ in DIRECTIONS:
+        ring |= shift(burning.astype(np.float32), dr, dc, 0.0) > 0
+    ring &= ~burning
+    if not ring.any():
+        return "the polygon fills the whole computed area; draw a smaller polygon"
+    reasons = result["mask_reason"].values[ring]
+    if (reasons > 0).all():
+        codes, counts = np.unique(reasons, return_counts=True)
+        parts = [f"{100 * n / reasons.size:.0f}% {MASK_REASONS[c]}" for c, n in sorted(zip(codes, counts),
+                                                                                     key=lambda t: -t[1])]
+        return "nothing next to the polygon can catch fire: " + ", ".join(parts)
+    ok = ring & (result["mask_reason"].values == 0)
+    best = float(np.nanmax(result["ignition_prob"].values[ok]))
+    why = ""
+    if "emc_pct" in result:
+        why = f"; the air keeps fuel moist (equilibrium moisture {np.nanmedian(result['emc_pct'].values[ok]):.0f}%)"
+    return (f"the cells next to the polygon can burn, but every chance of spreading is below {min_prob:.0%} "
+            f"(highest {best:.1%}){why}")
+
+
 def _plain(v):
     """Attribute value -> something json.dumps accepts (NaN / inf -> None)."""
     if isinstance(v, (np.floating, float)):
@@ -140,6 +164,8 @@ def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nis
         notes.append(f"the simulated fire reached the edge of the {req['radius_km']:g} km area around the polygon; "
                      "spread beyond it is not computed (use fewer steps or a larger radius)")
     cells = cells_geojson(result, var="burn_prob")
+    if not cells["features"]:
+        notes.append("No spread on the map: " + no_spread_reason(result))
     prob = result["burn_prob"].values
     info = {k: _plain(result.attrs[k]) for k in SUMMARY_KEYS if k in result.attrs}
     info.update({"n_cells": len(cells["features"]), "max_prob": _plain(np.nanmax(prob)) if prob.size else None,

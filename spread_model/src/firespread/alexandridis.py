@@ -197,24 +197,38 @@ def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, 
             f"{emc_src}; P_dry: {dry_src}; P_vwc: {vwc_src}")
 
 
-def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
-    """P_mask per cell: 1 = can catch fire, 0 = cannot (no fuel, water, built-up, burning or already burned)."""
-    mask = np.ones(burning.shape, np.float32)
+# Why a cell cannot catch fire (result variable mask_reason); the first reason that applies is kept.
+MASK_REASONS = ("can burn", "burning now", "no fuel (LANDFIRE)", "built-up, bare, snow or water (ESA WorldCover)",
+                "already burned or water (NISAR)", "burn scar (Sentinel-2)")
+
+
+def mask_reasons(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
+    """Per cell, the index in MASK_REASONS (0 = can burn), and which inputs were used."""
+    reason = np.zeros(burning.shape, np.int8)
     used = ["burning now"]
-    mask[burning.astype(bool)] = 0
+
+    def mark(cells: np.ndarray, code: int) -> None:
+        reason[(reason == 0) & cells] = code
+    mark(burning.astype(bool), 1)
     if "fuel_lifeform" in ds:
-        mask[ds["fuel_lifeform"].values == 0] = 0
+        mark(ds["fuel_lifeform"].values == 0, 2)
         used.append("fuel_lifeform = 0")
     if "landcover" in ds:
-        mask[np.isin(ds["landcover"].values, WC_NOT_BURNABLE)] = 0
+        mark(np.isin(ds["landcover"].values, WC_NOT_BURNABLE), 3)
         used.append(f"landcover in {WC_NOT_BURNABLE}")
     if "nisar_burned" in ds:
-        mask[ds["nisar_burned"].values == 1] = 0
+        mark(ds["nisar_burned"].values == 1, 4)
         used.append("nisar_burned")
     if "s2_burned" in ds:
-        mask[ds["s2_burned"].values == 1] = 0
+        mark(ds["s2_burned"].values == 1, 5)
         used.append("s2_burned (Sentinel-2 dNBR)")
-    return mask, ", ".join(used)
+    return reason, ", ".join(used)
+
+
+def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
+    """P_mask per cell: 1 = can catch fire, 0 = cannot (no fuel, water, built-up, burning or already burned)."""
+    reason, used = mask_reasons(ds, burning)
+    return (reason == 0).astype(np.float32), used
 
 
 def p_wind(u: np.ndarray, v: np.ndarray, bearing_deg: float, params: AlexandridisParams) -> np.ndarray:
@@ -304,7 +318,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     veg, veg_src = p_veg(snap, params)
     den, den_src = p_den(snap, params)
     moist, moist_parts, moist_src = p_moisture(snap, params)
-    mask, mask_src = p_mask(snap, burning)
+    reason, mask_src = mask_reasons(snap, burning)
+    mask = (reason == 0).astype(np.float32)
     if "wind_u_ms" in snap and "wind_v_ms" in snap:
         u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
         v = np.nan_to_num(snap["wind_v_ms"].values.astype(np.float32))
@@ -361,11 +376,14 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out = xr.Dataset(
         {"p_veg": (dims2, veg), "p_den": (dims2, den), "p_m": (dims2, moist),
          **{k: (dims2, v) for k, v in moist_parts.items()}, "p_mask": (dims2, mask),
+         "mask_reason": (dims2, reason),
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
          "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
         coords={**coords, "direction": DIR_NAMES})
     out["p_spread"].attrs["description"] = "P(burning cell at (y, x) ignites its neighbour in `direction`), clipped to 1"
     out["ignition_prob"].attrs["description"] = "probability the cell catches fire in the next CA step"
+    out["mask_reason"].attrs["description"] = "why the cell cannot catch fire: " + "; ".join(
+        f"{i} = {r}" for i, r in enumerate(MASK_REASONS))
     weather_time = (str(pd.Timestamp(snap["time"].values)) if "time" in snap.coords else "")
     out.attrs.update({
         **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "weather_source")

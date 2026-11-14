@@ -363,11 +363,14 @@ def _read_window(source, group: str, datasets: list[str], grid: TargetGrid, prep
                  how: str, chunk_dir: Path | None = None) -> dict[str, np.ndarray]:
     if Path(str(source)).exists():                      # local file: h5py reads the window directly
         with open_granule(source) as f:
-            g = f[group]
-            epsg = _epsg(g)
-            x, y = g["xCoordinates"][:].astype(np.float64), g["yCoordinates"][:].astype(np.float64)
-            win = _grid_window(x, y, epsg, grid)
-            arrays = None
+            arrays, win = None, None
+            if group not in f:
+                _absent_group(source, group)
+            else:
+                g = f[group]
+                epsg = _epsg(g)
+                x, y = g["xCoordinates"][:].astype(np.float64), g["yCoordinates"][:].astype(np.float64)
+                win = _grid_window(x, y, epsg, grid)
             if win is not None:
                 shape = (len(y[win[0]]), len(x[win[1]]))
                 arrays = {k: _fill_to_nan(g[k][win], g[k]) if k in g else _missing(source, k, shape) for k in datasets}
@@ -385,6 +388,11 @@ def _read_window(source, group: str, datasets: list[str], grid: TargetGrid, prep
     src_res = abs(float(sx[1] - sx[0]))
     mode = how if how != "auto" else ("mean" if src_res * 1.5 <= grid.res else "sample")
     return (_mean_to_grid if mode == "mean" else _sample_to_grid)(arrays, sx, sy, epsg, grid)
+
+
+def _absent_group(source, group: str) -> None:
+    """A granule without the group we read (e.g. GCOV with frequency B only): it has no data for us."""
+    log.warning("%s has no group %s: treated as no data", Path(str(source)).name, group)
 
 
 def _missing(source, name: str, shape: tuple[int, int]) -> np.ndarray:
@@ -418,16 +426,21 @@ def _meta(f_open: Callable[[], h5py.File], group: str, datasets: list[str], chun
     path = chunk_dir / "meta.json" if chunk_dir is not None else None
     meta = json.loads(path.read_text()) if path is not None and path.exists() else {}
     m = meta.get(group)
-    if m is None or any(k not in m["datasets"] for k in datasets):
-        g = f_open()[group]
+    if m is not None and (m.get("absent") or all(k in m["datasets"] for k in datasets)):
+        return m
+    f = f_open()
+    if group not in f:
+        m = {"absent": True}                   # e.g. GCOV with frequency B only; remembered for next time
+    else:
+        g = f[group]
         m = m or {"epsg": _epsg(g), "x": _coords(g["xCoordinates"]), "y": _coords(g["yCoordinates"]), "datasets": {}}
         for k in datasets:
             if k not in m["datasets"]:
                 m["datasets"][k] = _dataset_meta(g[k]) if k in g else None   # None: not in this granule
-        meta[group] = m
-        if path is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(meta))
+    meta[group] = m
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(meta))
     return m
 
 
@@ -472,6 +485,9 @@ def _remote_window(url: str, group: str, datasets: list[str], grid: TargetGrid, 
             return opened[0]
 
         m = _meta(f_open, group, datasets, chunk_dir)
+        if m.get("absent"):
+            _absent_group(url, group)
+            return None
         x, y = np.linspace(*m["x"]), np.linspace(*m["y"])
         win = _grid_window(x, y, m["epsg"], grid)
         if win is None:

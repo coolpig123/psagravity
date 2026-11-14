@@ -98,9 +98,12 @@ def _latest_before(col: ee.ImageCollection, t: pd.Timestamp, lookback: pd.Timede
 # ---- static / snapshot layers ---------------------------------------------------------------
 
 def _terrain(region, t):
-    nasadem = ee.Image("NASA/NASADEM_HGT/001").select("elevation").resample("bilinear")
-    gmted = ee.Image("USGS/GMTED2010_FULL").select("be75").resample("bilinear")
-    return nasadem.unmask(gmted).rename("elevation_m"), {}
+    # NASADEM (30 m, 60N-56S) on top of GMTED (global, 225 m). A mosaic, not nasadem.unmask(gmted): unmask
+    # keeps NASADEM's recorded footprint, which misses some covered areas (all elevation was NaN in Nigeria).
+    # Each input is resampled before the mosaic (a mosaic has no native resolution of its own).
+    nasadem = ee.Image("NASA/NASADEM_HGT/001").select("elevation").toFloat().resample("bilinear")
+    gmted = ee.Image("USGS/GMTED2010_FULL").select("be75").toFloat().resample("bilinear")
+    return ee.ImageCollection([gmted.rename("elevation_m"), nasadem.rename("elevation_m")]).mosaic(), {}
 
 
 def _landcover(region, t):

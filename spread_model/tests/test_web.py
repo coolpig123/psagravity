@@ -86,6 +86,31 @@ def test_predict_payload_without_nisar_and_when_nisar_fails():
     assert any("edge" in n for n in out["summary"]["notes"])        # 30 steps on an 11-cell grid reach the edge
 
 
+def test_empty_map_says_why():
+    from firespread.web import no_spread_reason
+    ds = make_ds()
+    lc = np.full((N, N), 80, np.int16)                              # water all round...
+    lc[C - 1:C + 2, C + 1] = 20
+    ds["landcover"] = (("y", "x"), lc)
+    scar = np.zeros((N, N), np.int16)
+    scar[C - 1:C + 2, C + 1] = 1                                    # ...except a burn scar to the east
+    ds["s2_burned"] = (("y", "x"), scar)
+    msg = no_spread_reason(spread_probabilities(ds))
+    assert msg == ("nothing next to the polygon can catch fire: 62% built-up, bare, snow or water (ESA WorldCover), "
+                   "38% burn scar (Sentinel-2)")
+    wet = make_ds(temp=15.0, rh=100.0)                              # can burn, but very wet air
+    wet_res = spread_probabilities(wet)
+    msg = no_spread_reason(wet_res, min_prob=1.0)
+    assert "every chance of spreading is below" in msg and "equilibrium moisture" in msg
+
+    def fake(**kw):
+        d = make_ds()
+        d["landcover"] = (("y", "x"), np.full((N, N), 80, np.int16))
+        return spread_probabilities(d)
+    out = predict_payload({**BODY, "use_nisar": False}, predict_fn=fake)
+    assert out["summary"]["n_cells"] == 0 and out["summary"]["notes"][-1].startswith("No spread on the map: nothing")
+
+
 def test_cells_geojson_positions_and_empty():
     res = spread_probabilities(make_ds())
     from pyproj import Transformer
