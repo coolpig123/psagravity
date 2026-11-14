@@ -49,8 +49,48 @@ type Prediction = {
     n_cells: number
     max_prob: number | null
     notes: string[]
+    // arrival times (survival model, spread_model/src/firespread/survival.py); false if it was skipped
+    arrival?: boolean
+    arrival_horizons_h?: number[]
+    arrival_model?: string
+    arrival_area_6h_km2?: number
+    arrival_area_12h_km2?: number
+    arrival_area_24h_km2?: number
+    arrival_area_48h_km2?: number
   }
 }
+
+// What the prediction cells are coloured by: CA chance (p), median arrival hours (t50), or chance within N h.
+type View = 'p' | 't50' | 'p6' | 'p12' | 'p24' | 'p48'
+const VIEW_LABELS: Record<View, string> = {
+  p: 'Chance of burning (CA steps)',
+  t50: 'Arrival time (median hours)',
+  p6: 'Chance within 6 h',
+  p12: 'Chance within 12 h',
+  p24: 'Chance within 24 h',
+  p48: 'Chance within 48 h',
+}
+const CHANCE_COLORS: (number | string)[] = [0, '#ffd23f', 0.25, '#ff9f1c', 0.5, '#f3722c', 0.75, '#d62828', 1, '#6a040f']
+// soon = dark red, later = yellow
+const HOURS_COLORS: (number | string)[] = [0, '#6a040f', 6, '#d62828', 12, '#f3722c', 24, '#ff9f1c', 48, '#ffd23f', 96, '#fff3b0']
+
+function viewPaint(view: View) {
+  const value: maplibregl.ExpressionSpecification = ['coalesce', ['get', view], view === 't50' ? 1000 : 0]
+  const ramp = ['interpolate', ['linear'], value, ...(view === 't50' ? HOURS_COLORS : CHANCE_COLORS)] as unknown as
+    maplibregl.ExpressionSpecification
+  const opacity = (view === 't50'
+    ? ['interpolate', ['linear'], value, 0, 0.9, 48, 0.7, 96, 0.45]
+    : ['interpolate', ['linear'], value, 0, 0.45, 0.3, 0.75, 1, 0.9]) as unknown as maplibregl.ExpressionSpecification
+  // arrival view: only cells the fire may plausibly reach within 2 days; chance views: hide ~0 chances
+  const filter = (view === 't50'
+    ? ['>=', ['coalesce', ['get', 'p48'], 0], 0.05]
+    : ['>', ['coalesce', ['get', view], 0], 0.01]) as unknown as maplibregl.FilterSpecification
+  return { ramp, opacity, filter }
+}
+
+const fmtHours = (h: number | null | undefined) =>
+  h === null || h === undefined ? '–' : h < 1 ? `${Math.round(h * 60)} min` : h < 72 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} days`
+const fmtPct = (p: number | null | undefined) => (p === null || p === undefined ? '–' : `${Math.round(p * 100)}%`)
 
 // Area of the closed polygon on the Earth's surface, in km² (spherical formula, as in Turf.js).
 function areaKm2(points: Point[]): number {
@@ -139,6 +179,7 @@ function App() {
   const [prediction, setPrediction] = useState<Prediction | null>(null)
   const [predicting, setPredicting] = useState(false)
   const [error, setError] = useState('')
+  const [view, setView] = useState<View>('p')
   const requestId = useRef(0) // answers of older requests (polygon cleared or redrawn meanwhile) are dropped
 
   useEffect(() => {
@@ -229,6 +270,27 @@ function App() {
       setLoaded(true)
     })
 
+    // Click a prediction cell (when not drawing): its chance and arrival time.
+    map.on('click', 'prediction-fill', (e) => {
+      if (modeRef.current === 'drawing') return
+      const q = e.features?.[0]?.properties
+      if (!q) return
+      const arrival = q.t50 !== undefined
+      const html =
+        `<b>Chance of burning (CA steps):</b> ${fmtPct(q.p)}` +
+        (arrival
+          ? `<br><b>Median arrival:</b> ${fmtHours(q.t50)}` +
+            `<br><b>Chance within</b> 6 h ${fmtPct(q.p6)} · 12 h ${fmtPct(q.p12)} · 24 h ${fmtPct(q.p24)} · 48 h ${fmtPct(q.p48)}`
+          : '')
+      new maplibregl.Popup({ closeButton: true, maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map)
+    })
+    map.on('mouseenter', 'prediction-fill', () => {
+      if (modeRef.current !== 'drawing') map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', 'prediction-fill', () => {
+      if (modeRef.current !== 'drawing') map.getCanvas().style.cursor = ''
+    })
+
     // A 'click' only fires if the mouse barely moved; a drag pans the map instead.
     map.on('click', (e) => {
       if (modeRef.current !== 'drawing') return
@@ -312,6 +374,22 @@ function App() {
       mapRef.current?.fitBounds([[w, s], [e, n]], { padding: 30, duration: 800 })
     }
   }, [prediction, loaded])
+
+  // Colour the cells by the chosen view.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!loaded || !map?.getLayer('prediction-fill')) return
+    const { ramp, opacity, filter } = viewPaint(view)
+    map.setPaintProperty('prediction-fill', 'fill-color', ramp)
+    map.setPaintProperty('prediction-fill', 'fill-outline-color', ramp)
+    map.setPaintProperty('prediction-fill', 'fill-opacity', opacity)
+    map.setFilter('prediction-fill', filter)
+  }, [view, loaded])
+
+  // A prediction without arrival times can only be shown as the CA chance.
+  useEffect(() => {
+    if (prediction && !prediction.summary.arrival) setView('p')
+  }, [prediction])
 
   // Clearing or redrawing the polygon removes the prediction and ignores one still on its way.
   const dropPrediction = () => {
@@ -463,11 +541,43 @@ ${err instanceof Error ? err.message : err}`)
               <b>Burn scars (Sentinel-2):</b>{' '}
               {s.s2_clear_pct !== undefined ? `${s.s2_burned_pct}% burned, ${s.s2_clear_pct}% clear view` : 'not used'}
             </p>
+            {s.arrival && (
+              <p>
+                <b>Arrival time (survival model):</b> expected burned area within{' '}
+                {(s.arrival_horizons_h ?? []).map((h, i) => (
+                  <span key={h}>
+                    {i > 0 && ', '}
+                    {h} h {(s[`arrival_area_${h}h_km2` as keyof typeof s] as number | undefined)?.toFixed(1)} km²
+                  </span>
+                ))}
+                {'. '}
+                <span className="model-name">{s.arrival_model}</span>
+              </p>
+            )}
             {[s.weather_note, ...s.notes].filter(Boolean).map((note, i) => (
               <p key={i} className="note">Note: {note}</p>
             ))}
             <p className="legend">
-              Chance of burning within {s.sim_steps} steps (one step = up to one 100 m cell) <span className="ramp" /> 0 → 1
+              {s.arrival && (
+                <label className="view">
+                  Show{' '}
+                  <select value={view} onChange={(e) => setView(e.target.value as View)}>
+                    {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
+                      <option key={v} value={v}>{VIEW_LABELS[v]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {view === 'p' && (
+                <>Chance of burning within {s.sim_steps} steps (one step = up to one 100 m cell) <span className="ramp" /> 0 → 1</>
+              )}
+              {view === 't50' && (
+                <>Median hours until the fire arrives (cells with ≥ 5% chance within 48 h) 0 h <span className="ramp hours" /> 4 days</>
+              )}
+              {view !== 'p' && view !== 't50' && (
+                <>{VIEW_LABELS[view]} <span className="ramp" /> 0 → 1</>
+              )}
+              {' · click a cell for its numbers'}
             </p>
           </>
         )}

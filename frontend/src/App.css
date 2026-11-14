@@ -124,6 +124,15 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
   background: linear-gradient(to right, #ffd23f, #ff9f1c 25%, #f3722c 50%, #d62828 75%, #6a040f);
 }
 
+/* Arrival hours: soon (dark red) -> later (pale yellow); stops at 0, 6, 12, 24, 48, 96 h of 96. */
+.ramp.hours {
+  background: linear-gradient(to right, #6a040f, #d62828 6%, #f3722c 12%, #ff9f1c 25%, #ffd23f 50%, #fff3b0);
+}
+
+.panel .view { margin-right: 10px; }
+.panel .view select { font: inherit; padding: 2px 4px; }
+.panel .model-name { color: #777; font-size: 12px; }
+
 /* Area of the polygon: a pill, green up to 400 km², red above. */
 .area {
   margin-left: auto;
