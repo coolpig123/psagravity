@@ -5,9 +5,10 @@ For a burning cell i and each of its 8 neighbours j at time t:
     P_burn(i -> j, t) = clip(P0 * (1 + P_veg[j]) * (1 + P_den[j]) * P_w(i -> j, t) * P_s(i -> j)
                              * P_m(j, t) * P_mask[j] * D(i -> j), 0, 1)
 
-    P_m(j, t) = P_emc(j, t) * (1 + P_dry[j])
+    P_m(j, t) = P_emc(j, t) * (1 + P_dry[j]) * (1 + P_vwc[j])
     P_emc     = exp(-b_emc * (EMC(T, RH) - emc_ref))      fast: hourly air -> fine-fuel moisture (Simard 1968)
     P_dry     = NISAR soil-moisture class (+0.3 / 0 / -0.3) slow: ground moisture
+    P_vwc     = NISAR vegetation-water class (+0.2 / 0 / -0.2) slow: water held in live vegetation
 
 D = 1 for N/E/S/W neighbours and diagonal_factor (1/sqrt(2)) for diagonal ones. An unburned cell j
 catches fire in the next step with probability 1 - prod_i (1 - P_burn(i -> j)) over its burning
@@ -72,6 +73,13 @@ class AlexandridisParams:
     dry_wet: float = -0.3         # soil moisture at or above wet_from_m3m3
     dry_below_m3m3: float = 0.10
     wet_from_m3m3: float = 0.25
+    # P_vwc from nisar_vwc_kg_m2 (SME2 vegetation water content; placeholder values, to be calibrated).
+    # VWC also grows with biomass, so it partly overlaps P_veg / P_den: kept small until calibrated.
+    vwc_low: float = 0.2          # VWC below vwc_low_below_kg_m2: little water in the vegetation (cured grass, dry shrub)
+    vwc_normal: float = 0.0
+    vwc_high: float = -0.2        # VWC at or above vwc_high_from_kg_m2: well-watered live canopy
+    vwc_low_below_kg_m2: float = 0.5
+    vwc_high_from_kg_m2: float = 4.0
     # diagonal neighbours are sqrt(2) cells away: same per-step probability would make flat, calm fires
     # advance sqrt(2) faster along diagonals. 1/sqrt(2) equalises the expected advance per step;
     # 1.0 reproduces the paper.
@@ -167,14 +175,26 @@ def p_emc(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, np.nd
             "EMC: Simard 1968 from temp_c, rh_pct" + (f"; {n_nan} cells without weather -> 1" if n_nan else ""))
 
 
-def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, dict[str, np.ndarray], str]:
-    """P_m = P_emc * (1 + P_dry): fast air moisture (GEE hourly) x slow ground moisture (NISAR).
+def p_vwc(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
+    """P_vwc per cell from NISAR vegetation water content only: low / normal / high. No NISAR -> 0 (neutral)."""
+    if "nisar_vwc_kg_m2" not in ds:
+        return np.zeros((ds.sizes["y"], ds.sizes["x"]), np.float32), "nisar_vwc_kg_m2 not provided -> 0 (neutral)"
+    out, n_nan = _classes(ds["nisar_vwc_kg_m2"].values.astype(np.float32), params.vwc_low_below_kg_m2,
+                          params.vwc_high_from_kg_m2, params.vwc_low, params.vwc_normal, params.vwc_high)
+    return out, "nisar_vwc_kg_m2" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
 
-    Returns (P_m, components {"emc_pct", "p_emc", "p_dry"}, source).
+
+def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, dict[str, np.ndarray], str]:
+    """P_m = P_emc * (1 + P_dry) * (1 + P_vwc): fast air moisture (GEE hourly) x slow ground and vegetation
+    moisture (NISAR).
+
+    Returns (P_m, components {"emc_pct", "p_emc", "p_dry", "p_vwc"}, source).
     """
     emc_factor, emc, emc_src = p_emc(ds, params)
     dry, dry_src = p_dry(ds, params)
-    return emc_factor * (1 + dry), {"emc_pct": emc, "p_emc": emc_factor, "p_dry": dry}, f"{emc_src}; P_dry: {dry_src}"
+    vwc, vwc_src = p_vwc(ds, params)
+    return (emc_factor * (1 + dry) * (1 + vwc), {"emc_pct": emc, "p_emc": emc_factor, "p_dry": dry, "p_vwc": vwc},
+            f"{emc_src}; P_dry: {dry_src}; P_vwc: {vwc_src}")
 
 
 def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
@@ -261,7 +281,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     Returns a Dataset with
       p_veg, p_den, p_m, p_mask (y, x)            factors of the cell that would catch fire
-      emc_pct, p_emc, p_dry (y, x)                the two parts of p_m (p_m = p_emc * (1 + p_dry))
+      emc_pct, p_emc, p_dry, p_vwc (y, x)         the parts of p_m (p_m = p_emc * (1 + p_dry) * (1 + p_vwc))
       p_wind, p_slope, p_spread (direction, y, x) for the burning cell at (y, x) spreading toward `direction`
       ignition_prob (y, x)                        chance each unburned cell catches fire in the next step
     and attrs summarising the most likely spread direction.
@@ -348,7 +368,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "nisar_alignment")
            if k in ds.attrs},
         "model": "Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
-                 "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR); D = 1/sqrt(2) diagonal",
+                 "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR) (1+P_vwc_NISAR); "
+                 "D = 1/sqrt(2) diagonal",
         "params": repr(params),
         "weather_time_utc": weather_time,
         "weather_note": time_note,

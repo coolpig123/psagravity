@@ -170,6 +170,25 @@ def test_p_m_combines_emc_and_nisar_soil_moisture():
     assert "Moisture P_m" in summary(res)
 
 
+def test_p_vwc_and_three_part_p_m():
+    from firespread import p_vwc
+    ds = make_ds()
+    v, src = p_vwc(ds, P)
+    assert (v == 0).all() and "not provided" in src
+    ds["nisar_vwc_kg_m2"] = (("y", "x"), np.full((N, N), 0.2, np.float32))
+    ds["nisar_vwc_kg_m2"].values[0, :4] = [0.5, 3.9, 4.0, np.nan]
+    v, _ = p_vwc(ds, P)
+    assert v[1, 1] == pytest.approx(0.2) and v[0, :4].tolist() == pytest.approx([0.0, 0.0, -0.2, 0.0])
+    # P_m = P_emc (1 + P_dry)(1 + P_vwc), all from one call
+    ds = make_ds(temp=30, rh=25, nisar_sm=0.05)
+    ds["nisar_vwc_kg_m2"] = (("y", "x"), np.full((N, N), 6.0, np.float32))
+    p_m, parts, src = p_moisture(ds.isel(time=0), P)
+    assert np.allclose(p_m, parts["p_emc"] * 1.3 * 0.8)
+    assert "nisar_vwc_kg_m2" in src
+    res = spread_probabilities(ds)
+    assert float(res["p_vwc"][0, 0]) == pytest.approx(-0.2)
+
+
 def test_p_mask():
     burning = np.array([[1, 0, 0, 0, 0]], bool)
     ds = xr.Dataset({"fuel_lifeform": (("y", "x"), np.array([[2, 2, 0, 2, 2]], np.int16)),

@@ -1,23 +1,22 @@
-"""Bridge: NISAR GCOV layers (nisar_layers.py) -> the spread model's NISAR contract (firespread/nisar.py).
+"""NISAR -> the spread model's NISAR contract (firespread/nisar.py), reading only the area around the fire.
 
     from firedata.nisar_provider import nisar_provider
     from firespread import predict
     result = predict(polygon=drawn_geojson, start="2026-08-09T21:00Z", nisar=nisar_provider())
 
-The spread model calls the provider with a request (grid crs / x / y, lon-lat box, start time). The
-provider picks the latest NISAR GCOV pass before the start time over that area, reads HH / HV straight
-onto the model grid (nisar_layers.resample_gcov_to_grid) and computes the variables with
-nisar_layers' formulas. Only the variables the spread model knows are returned:
-
-    nisar_cover_pct (%), nisar_soil_moisture (m3/m3), nisar_burned (0/1, -1 = no NISAR data)
-
-Differences from extract_nisar_dataset(), on purpose:
-- cells without NISAR data (outside the swath / fill) are "no data" (NaN, -1), not "burned", so the
-  fire is not stopped at the edge of a swath;
-- `nisar_combustible` is not returned (it is 1 - nisar_burned; the model derives that itself);
-- the grid is the model's, in the model's CRS, instead of a fixed 20 km box around the ignition.
-
-No spread-model import is needed here: the request is used by attribute (crs, x, y, bbox_lonlat, time_utc).
+For a request (model grid crs / x / y, lon-lat box, start time) the provider:
+1. finds the latest NISAR pass before the start time over the box (ASF search, all frames);
+2. GCOV (10 m): reads HH / HV of the box only (remote byte-range reads, cached), averages them in linear
+   power into each model cell, keeping only valid samples (GCOV `mask` 1..254);
+     nisar_cover_pct  <- HV, calibrated to vegetation cover (see COVER_HV_DB below)
+     nisar_burned = 1 <- water / bare rock (nisar_layers.compute_burned_mask) and burn scars: HV dropped by
+                        >= scar_drop_db (averaged over 3 x 3 cells) since an earlier pass of the same track
+                        (same viewing geometry); see SCAR_DROP_DB for how well this finds burned area
+3. SME2 (L3, 200 m, same pass): NASA's soil-moisture retrieval, sampled at the cell centres
+     nisar_soil_moisture <- soilMoisture where the retrieval is "recommended" (retrievalQualityFlag bit 0 = 0)
+     nisar_vwc_kg_m2     <- PMI vegetationWaterContentRetrieved where the PMI quality flag is 0
+     water bodies (waterbodyFraction >= 0.5) are added to nisar_burned
+Cells NISAR does not cover are no data (NaN / -1), never "burned". Returns None when no pass is found.
 """
 from __future__ import annotations
 
@@ -29,97 +28,194 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .config import FIRES, REPO_ROOT
-from .nisar_layers import compute_burned_mask, compute_cover_pct, compute_soil_moisture, resample_gcov_to_grid
+from .nisar_access import (CACHE_DIR, GCOV_GROUP, SME2_GROUP, Pass, TargetGrid, group_passes, read_pass,
+                           search_granules)
+from .nisar_layers import compute_burned_mask
 
 log = logging.getLogger(__name__)
 
-SPREAD_MODEL_VARIABLES = ("nisar_cover_pct", "nisar_soil_moisture", "nisar_burned")
+SPREAD_MODEL_VARIABLES = ("nisar_cover_pct", "nisar_soil_moisture", "nisar_vwc_kg_m2", "nisar_burned")
+
+# HV (dB, 100 m mean of gamma0) -> vegetation cover %. Calibrated 2026-11-14 on the Bug Fire area before the fire
+# (GCOV A106 2026-07-27, 30 x 30 km, 100 m) against LANDFIRE EVC cover of tree / shrub cells: quantile matching,
+# sparse / normal boundary (30 %) at the HV with LANDFIRE's share of sparse cells. Skill is modest: class agreement
+# 0.68 vs 0.63 for always "sparse", mean abs error 10 vs 13 points. HV sees woody volume, not grass (Spearman with
+# LANDFIRE cover: trees 0.55, shrubs 0.28, grass -0.06), so grass reads as sparse. Re-calibrate per region.
+COVER_HV_DB = (-21.0, -17.6, -12.0, -9.0)
+COVER_PCT = (10.0, 30.0, 55.0, 70.0)
+
+SME2_DATASETS = ["soilMoisture", "retrievalQualityFlag", "algorithmCandidates/PMI/vegetationWaterContentRetrieved",
+                 "algorithmCandidates/PMI/retrievalQualityFlag", "ancillaryData/waterbodyFraction"]
 
 
-def layers_from_backscatter(hh: np.ndarray, hv: np.ndarray) -> dict[str, np.ndarray]:
-    """nisar_layers' formulas on HH / HV (linear power) already on the model grid; no data kept as no data."""
+def cover_from_hv(hv_linear: np.ndarray) -> np.ndarray:
+    """Vegetation cover % from HV gamma0 (linear power), using the calibrated COVER_HV_DB -> COVER_PCT curve."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        hv_db = 10 * np.log10(hv_linear)
+    out = np.interp(hv_db, COVER_HV_DB, COVER_PCT).astype(np.float32)
+    out[~np.isfinite(hv_db)] = np.nan
+    return out
+
+
+def hv_change_db(hv: np.ndarray, hv_ref: np.ndarray, smooth_cells: int = 3) -> np.ndarray:
+    """HV change (dB) since the reference pass, averaged in linear ratio over smooth_cells x smooth_cells cells.
+
+    Averaging over neighbours cuts radar speckle: on the Bug Fire it raised burn-scar recall at the same
+    false-alarm rate (see SCAR_* below). NaN cells are left out of the average; no valid neighbour -> NaN.
+    """
+    from scipy.ndimage import uniform_filter
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = hv / hv_ref
+    ok = np.isfinite(ratio) & (ratio > 0)
+    if smooth_cells > 1:
+        num = uniform_filter(np.where(ok, ratio, 0.0), size=smooth_cells, mode="nearest")
+        den = uniform_filter(ok.astype(np.float64), size=smooth_cells, mode="nearest")
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ratio = np.where(den > 0, num / den, np.nan)
+        ok = np.isfinite(ratio) & (ratio > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(ok, 10 * np.log10(ratio), np.nan)
+
+
+# Burn-scar rule, chosen on the Bug Fire (08-15 A34 vs 05-11 A34, 100 m, vs the official WFIGS perimeter):
+#   HV drop >= 3 dB, single cell (original)      recall  9 %  precision 95 %  false alarms 0.2 %
+#   HV drop >= 2 dB, single cell                 recall 23 %  precision 90 %  false alarms 1.0 %
+#   HV drop >= 1.5 dB, 3 x 3 average (default)   recall 29 %  precision 92 %  false alarms 1.0 %
+#   HV drop >= 1 dB, 3 x 3 average               recall 42 %  precision 80 %  false alarms 4.6 %
+# End to end through nisar_provider (reference 05-23, water / rock included): recall 41 %, precision 90 %,
+# false alarms 2.0 % (the original 3 dB rule: 14 % / 93 % / 0.5 %).
+# Precision is favoured: a false "burned" cell blocks spread in the model. Median HV change inside the burned
+# area was only -0.8 dB (shrub / sagebrush has little volume to lose), so backscatter change cannot find most of
+# this fire's area; interferometric coherence loss (NISAR GUNW) is the next thing to try.
+SCAR_DROP_DB = 1.5
+SCAR_SMOOTH_CELLS = 3
+
+
+def layers_from_backscatter(hh: np.ndarray, hv: np.ndarray, hv_ref: np.ndarray | None = None,
+                            scar_drop_db: float = SCAR_DROP_DB,
+                            scar_smooth_cells: int = SCAR_SMOOTH_CELLS) -> dict[str, np.ndarray]:
+    """Cover % and burned mask from HH / HV (linear power, already on the model grid).
+
+    hv_ref: HV of an earlier pass of the same track; cells where the (neighbourhood-averaged) HV dropped by
+    >= scar_drop_db are burn scars. No data stays no data: cover NaN, burned -1.
+    """
     nodata = ~(np.isfinite(hh) & np.isfinite(hv) & (hh > 0) & (hv > 0))
     with np.errstate(invalid="ignore", divide="ignore"):
         rvi = np.where(nodata, 0.0, 4.0 * hv / (hh + hv)).astype(np.float32)
-    cover = compute_cover_pct(hh, hv)
-    soil = compute_soil_moisture(hh)
-    burned, _ = compute_burned_mask(hh, hv, rvi=rvi)
-    cover[nodata] = np.nan
-    soil[nodata] = np.nan
+    delta = None
+    if hv_ref is not None:
+        delta = np.where(nodata, np.nan, hv_change_db(hv, hv_ref, scar_smooth_cells))
+    burned, _ = compute_burned_mask(hh, hv, rvi=rvi)          # water / bare rock (nisar_layers thresholds)
+    if delta is not None:                                     # burn scars, with the configured threshold
+        burned = np.where(np.nan_to_num(delta, nan=0.0) <= -scar_drop_db, 1, burned)
     burned = burned.astype(np.int16)
     burned[nodata] = -1
-    return {"nisar_cover_pct": cover, "nisar_soil_moisture": soil, "nisar_burned": burned}
+    cover = cover_from_hv(hv)
+    cover[nodata] = np.nan
+    return {"nisar_cover_pct": cover, "nisar_burned": burned}
+
+
+def _gcov_valid(a: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Keep only fully focused samples: GCOV mask 1..254 (0 = invalid, 255 = outside the acquisition)."""
+    m = a.pop("mask")
+    bad = ~np.isfinite(m) | (m == 0) | (m == 255)
+    for k in a:
+        a[k][bad] = np.nan
+    return a
+
+
+def _sme2_valid(a: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Soil moisture where recommended (flag bit 0 = 0); VWC where the PMI flag is 0 (clear)."""
+    q = a["retrievalQualityFlag"]
+    recommended = np.isfinite(q) & ((np.nan_to_num(q, nan=1).astype(np.int64) & 1) == 0)
+    sm = np.where(recommended, a["soilMoisture"], np.nan)
+    pmi = a["algorithmCandidates/PMI/retrievalQualityFlag"]
+    vwc = np.where(pmi == 0, a["algorithmCandidates/PMI/vegetationWaterContentRetrieved"], np.nan)
+    return {"soil_moisture": sm.astype(np.float32), "vwc": vwc.astype(np.float32),
+            "water_fraction": a["ancillaryData/waterbodyFraction"]}
+
+
+def _utc(t) -> pd.Timestamp:
+    t = pd.Timestamp(t)
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def nisar_provider(*, lookback_days: float = 30.0, detect_scars: bool = True, scar_lookback_days: float = 90.0,
+                   scar_min_gap_days: float = 11.0, scar_drop_db: float = SCAR_DROP_DB,
+                   scar_smooth_cells: int = SCAR_SMOOTH_CELLS,
+                   search: Callable[..., pd.DataFrame] = search_granules,
+                   cache_dir: Path | None = CACHE_DIR) -> Callable[[Any], xr.Dataset | None]:
+    """A provider for firespread.predict(nisar=...).
+
+    lookback_days:      use the latest pass at most this long before the start (NISAR revisits a place every
+                        few days across tracks, 12 days per track)
+    detect_scars:       compare HV with the earliest same-track pass in [start - scar_lookback_days,
+                        latest pass - scar_min_gap_days]; a drop of >= scar_drop_db dB, averaged over
+                        scar_smooth_cells x scar_smooth_cells cells, = burn scar
+    search:             granule search (default: ASF); injectable for tests / other archives
+    cache_dir:          where regridded windows are cached (None = no cache)
+    Needs EARTHDATA_USERNAME / EARTHDATA_PASSWORD in real_fires/.env for remote reads.
+    """
+    def get_nisar(request: Any) -> xr.Dataset | None:
+        grid = TargetGrid.from_request(request)
+        t = _utc(request.time_utc)
+        bbox = tuple(request.bbox_lonlat)
+        start_search = t - pd.Timedelta(days=max(lookback_days, scar_lookback_days if detect_scars else 0))
+        gcov_passes = [p for p in group_passes(search("GCOV", bbox, start_search, t)) if p.time_utc < t]
+        recent = [p for p in gcov_passes if p.time_utc >= t - pd.Timedelta(days=lookback_days)]
+        if not recent:
+            log.info("no NISAR GCOV pass in the %s days before %s", lookback_days, t)
+            return None
+        latest = recent[-1]
+        attrs = {"crs": grid.crs, "nisar_pass_utc": latest.time_utc.isoformat(), "nisar_track": latest.track_id,
+                 "nisar_gcov_granules": ",".join(latest.file_ids)}
+
+        gcov = read_pass(latest, GCOV_GROUP, ["HHHH", "HVHV", "mask"], grid, prepare=_gcov_valid, cache_dir=cache_dir)
+        hh, hv = gcov["HHHH"], gcov["HVHV"]
+        if not np.isfinite(hv).any():
+            log.info("NISAR pass %s does not cover the area", latest.time_utc)
+            return None
+
+        hv_ref = None
+        if detect_scars:
+            refs = [p for p in gcov_passes if p.track_id == latest.track_id
+                    and p.time_utc <= latest.time_utc - pd.Timedelta(days=scar_min_gap_days)]
+            if refs:
+                ref = refs[0]   # earliest in the window: scars from the whole season so far
+                hv_ref = read_pass(ref, GCOV_GROUP, ["HVHV", "mask"], grid, prepare=_gcov_valid,
+                                   cache_dir=cache_dir)["HVHV"]
+                attrs["nisar_scar_reference_utc"] = ref.time_utc.isoformat()
+            else:
+                attrs["nisar_scar_reference_utc"] = "none (no earlier same-track pass): scars not detected"
+        layers = layers_from_backscatter(hh, hv, hv_ref, scar_drop_db, scar_smooth_cells)
+
+        sm = np.full(grid.shape, np.nan, np.float32)
+        vwc = np.full(grid.shape, np.nan, np.float32)
+        sme2 = [p for p in group_passes(search("SME2", bbox, latest.time_utc - pd.Timedelta(minutes=10),
+                                               latest.time_utc + pd.Timedelta(minutes=10)))
+                if p.track_id == latest.track_id]
+        if sme2:
+            s = read_pass(sme2[0], SME2_GROUP, SME2_DATASETS, grid, prepare=_sme2_valid, cache_dir=cache_dir)
+            sm, vwc = s["soil_moisture"], s["vwc"]
+            water = np.nan_to_num(s["water_fraction"], nan=0.0) >= 0.5
+            layers["nisar_burned"][water & (layers["nisar_burned"] >= 0)] = 1
+            attrs["nisar_sme2_granules"] = ",".join(sme2[0].file_ids)
+        else:
+            attrs["nisar_sme2_granules"] = "none for this pass: soil moisture / VWC not provided"
+        attrs["nisar_coverage_pct"] = float(100 * np.isfinite(hv).mean())
+
+        coords = {"y": ("y", grid.y), "x": ("x", grid.x)}
+        data = {**layers, "nisar_soil_moisture": sm, "nisar_vwc_kg_m2": vwc}
+        return xr.Dataset({k: (("y", "x"), data[k]) for k in SPREAD_MODEL_VARIABLES}, coords=coords, attrs=attrs)
+
+    return get_nisar
 
 
 def to_spread_model(ds: xr.Dataset) -> xr.Dataset:
     """Adapt an extract_nisar_dataset() result (e.g. a saved .nc) to the spread-model contract.
 
-    Keeps only the contract variables. extract_nisar_dataset() marks no-data cells as burned; they
-    cannot be told apart from real water / rock afterwards, so prefer nisar_provider() when possible.
+    Keeps only the contract variables. Prefer nisar_provider(): extract_nisar_dataset() marks no-data cells as
+    burned, estimates soil moisture from HH and uses RVI x 100 as cover (see nisar_provider's docstring).
     """
     out = ds[[v for v in SPREAD_MODEL_VARIABLES if v in ds]]
     return out.drop_vars([c for c in ("lat", "lon") if c in out.coords])
-
-
-def _latest_pass_before(request: Any, fire: str | None, track: str | None, lookback_days: float) -> tuple[str, str] | None:
-    """(file_id, raw cache folder) of the latest GCOV pass before the request time, or None."""
-    t = pd.Timestamp(request.time_utc)
-    t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
-    if fire:
-        cfg = FIRES[fire]
-        passes = pd.read_csv(cfg.root / "processed" / "nisar_passes.csv", parse_dates=["time_utc"])
-        raw = cfg.dir("raw") / "nisar"
-    else:   # any place (e.g. a polygon drawn in the app): search ASF around the centre of the area
-        from .nisar import search_passes
-        w, s, e, n = request.bbox_lonlat
-        passes = search_passes((w + e) / 2, (s + n) / 2, t - pd.Timedelta(days=lookback_days), t)
-        raw = REPO_ROOT / "data" / "nisar_cache"
-    if passes.empty:
-        return None
-    times = pd.to_datetime(passes["time_utc"], utc=True)
-    sel = passes[(times < t) & (times >= t - pd.Timedelta(days=lookback_days))]
-    if track:
-        sel = sel[sel["track_id"] == track]
-    if sel.empty:
-        return None
-    row = sel.assign(_t=pd.to_datetime(sel["time_utc"], utc=True)).sort_values("_t").iloc[-1]
-    return str(row["file_id"]), str(raw)
-
-
-def nisar_provider(fire: str | None = None, track: str | None = None, h5_path: str | Path | None = None,
-                   lookback_days: float = 30.0) -> Callable[[Any], xr.Dataset | None]:
-    """A provider for firespread.predict(nisar=...).
-
-    fire:     use that fire's NISAR pass list (processed/nisar_passes.csv); None = search ASF around the area
-    track:    only this track (e.g. "A34"); None = latest pass on any track
-    h5_path:  use this GCOV file directly (no search, no download)
-    lookback_days: ignore passes older than this before the start time (NISAR revisits every 12 days)
-    Downloading needs EARTHDATA_USERNAME / EARTHDATA_PASSWORD in real_fires/.env; files are cached.
-    """
-    def get_nisar(request: Any) -> xr.Dataset | None:
-        if h5_path is not None:
-            path, granule = Path(h5_path), Path(h5_path).stem
-        else:
-            found = _latest_pass_before(request, fire, track, lookback_days)
-            if found is None:
-                log.info("no NISAR pass in the %s days before %s", lookback_days, request.time_utc)
-                return None
-            granule, raw = found
-            from .vegetation import download_gcov
-            path = download_gcov(granule, Path(raw))
-        try:
-            hh, hv = resample_gcov_to_grid(path, np.asarray(request.x), np.asarray(request.y), target_crs=request.crs)
-        except (IndexError, ValueError):   # area outside the granule: resample_gcov_to_grid gets an empty window
-            log.info("NISAR granule %s does not cover the area", granule)
-            return None
-        layers = layers_from_backscatter(hh, hv)
-        if (layers["nisar_burned"] == -1).all():
-            log.info("NISAR granule %s does not cover the area", granule)
-            return None
-        coords = {"y": ("y", np.asarray(request.y)), "x": ("x", np.asarray(request.x))}
-        return xr.Dataset({k: (("y", "x"), v) for k, v in layers.items()}, coords=coords,
-                          attrs={"crs": request.crs, "nisar_granule": granule,
-                                 "nisar_coverage_pct": float(100 * (layers["nisar_burned"] != -1).mean())})
-
-    return get_nisar
