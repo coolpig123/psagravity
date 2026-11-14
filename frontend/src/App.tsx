@@ -7,6 +7,22 @@ type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
 
 const COLOR = '#e4572e'
+const MAX_AREA_KM2 = 400 // above this the area is shown in red
+
+// Area of the closed polygon on the Earth's surface, in km² (spherical formula, as in Turf.js).
+function areaKm2(points: Point[]): number {
+  if (points.length < 3) return 0
+  const R = 6371.0088 // mean Earth radius, km
+  const rad = (d: number) => (d * Math.PI) / 180
+  let sum = 0
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[(i - 1 + points.length) % points.length]
+    const curr = points[i]
+    const next = points[(i + 1) % points.length]
+    sum += (rad(next[0]) - rad(prev[0])) * Math.sin(rad(curr[1]))
+  }
+  return Math.abs((sum * R * R) / 2)
+}
 
 // Distance in Web Mercator units, so it is not distorted by latitude like raw degrees.
 function distance(a: Point, b: Point): number {
@@ -201,6 +217,8 @@ function App() {
     setMode('idle')
   }
 
+  const area = areaKm2(points)
+
   return (
     <div className="page">
       <div className="toolbar">
@@ -208,6 +226,11 @@ function App() {
         <button onClick={finish} disabled={mode !== 'drawing' || points.length < 3}>Finish</button>
         <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}>Undo</button>
         <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}>Clear</button>
+        {mode !== 'idle' && (
+          <span className={`area ${area > MAX_AREA_KM2 ? 'too-big' : 'ok'}`}>
+            {area.toLocaleString('en-US', { maximumFractionDigits: 1 })} km²
+          </span>
+        )}
       </div>
       <div ref={container} className="map" />
     </div>
