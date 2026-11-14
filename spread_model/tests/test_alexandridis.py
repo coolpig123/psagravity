@@ -359,6 +359,31 @@ def test_nisar_provider_and_template(tmp_path):
     assert float(res["p_dry"][0, 0]) == pytest.approx(0.3)
 
 
+def test_cli_nisar_option(tmp_path, monkeypatch):
+    import sys
+    import types
+    from firespread.__main__ import _nisar_source
+    assert _nisar_source(None, 30) is None
+    with pytest.raises(SystemExit, match="no such file"):
+        _nisar_source(str(tmp_path / "missing.nc"), 30)
+    # 'auto' -> firedata.nisar_provider.nisar_provider(lookback_days=...)
+    seen = {}
+    fake = types.ModuleType("firedata.nisar_provider")
+    fake.nisar_provider = lambda **kw: (seen.update(kw), "provider")[1]
+    monkeypatch.setitem(sys.modules, "firedata", types.ModuleType("firedata"))
+    monkeypatch.setitem(sys.modules, "firedata.nisar_provider", fake)
+    assert _nisar_source("auto", 12) == "provider" and seen == {"lookback_days": 12}
+    monkeypatch.setitem(sys.modules, "firedata.nisar_provider", None)          # real_fires not installed
+    with pytest.raises(SystemExit, match="pip install -e ../real_fires"):
+        _nisar_source("AUTO", 30)
+    # a saved file still works, end to end
+    ds = make_ds()
+    path = tmp_path / "nisar.nc"
+    nisar_on(ds, nisar_soil_moisture=np.full((N, N), 0.05, np.float32)).to_netcdf(path, engine="h5netcdf")
+    loaded = _nisar_source(str(path), 30)
+    assert float(predict(inputs=ds, nisar=loaded)["p_dry"][0, 0]) == pytest.approx(0.3)
+
+
 def test_nisar_bad_inputs_rejected():
     ds = make_ds()
     ok = nisar_on(ds, nisar_burned=np.zeros((N, N), np.int16))

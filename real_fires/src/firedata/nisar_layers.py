@@ -89,8 +89,10 @@ def compute_burned_mask(
     Returns
     -------
     (burned, combustible):
-      burned:      1 = already burned or non-combustible (cannot burn), 0 = combustible fuel
-      combustible: 1 = combustable / ready-to-burn fuel, 0 = non-combustible or already burned
+      burned:      1 = already burned or non-combustible (cannot burn), 0 = combustible fuel, -1 = no data
+      combustible: 1 = combustable / ready-to-burn fuel, 0 = non-combustible or already burned, -1 = no data
+    No data = HH or HV missing (outside the swath, fill values): it is unknown, not burned, so the spread
+    model does not stop the fire at the edge of a swath.
     """
     with np.errstate(invalid="ignore", divide="ignore"):
         hh_db = 10.0 * np.log10(np.where(hh > 0, hh, np.nan))
@@ -106,10 +108,11 @@ def compute_burned_mask(
     if delta_hv_db is not None:
         is_scar = delta_hv_db <= -3.0
 
-    unburnable = is_water | is_barren | is_scar | np.isnan(hh_db)
+    unburnable = is_water | is_barren | is_scar
+    nodata = np.isnan(hh_db) | np.isnan(hv_db)
 
-    burned = np.where(unburnable, np.int16(1), np.int16(0))
-    combustible = np.where(unburnable, np.int16(0), np.int16(1))
+    burned = np.where(nodata, np.int16(-1), np.where(unburnable, np.int16(1), np.int16(0))).astype(np.int16)
+    combustible = np.where(nodata, np.int16(-1), np.where(unburnable, np.int16(0), np.int16(1))).astype(np.int16)
     return burned, combustible
 
 

@@ -5,7 +5,8 @@
     result = predict(polygon=drawn_geojson, start="2026-08-09T21:00Z", nisar=nisar_provider())
 
 For a request (model grid crs / x / y, lon-lat box, start time) the provider:
-1. finds the latest NISAR pass before the start time over the box (ASF search, all frames);
+1. finds the latest NISAR pass before the start time over the box (ASF search, all frames); cells that pass
+   does not see (swath edges) are filled from the next-newest pass within lookback_days, and so on;
 2. GCOV (10 m): reads HH / HV of the box only (remote byte-range reads, cached), averages them in linear
    power into each model cell, keeping only valid samples (GCOV `mask` 1..254);
      nisar_cover_pct  <- HV, calibrated to vegetation cover (see COVER_HV_DB below)
@@ -20,6 +21,7 @@ Cells NISAR does not cover are no data (NaN / -1), never "burned". Returns None 
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -147,8 +149,8 @@ def nisar_provider(*, lookback_days: float = 30.0, detect_scars: bool = True, sc
                    cache_dir: Path | None = CACHE_DIR) -> Callable[[Any], xr.Dataset | None]:
     """A provider for firespread.predict(nisar=...).
 
-    lookback_days:      use the latest pass at most this long before the start (NISAR revisits a place every
-                        few days across tracks, 12 days per track)
+    lookback_days:      use passes at most this long before the start (NISAR revisits a place every few days
+                        across tracks, 12 days per track); the newest wins, older ones fill uncovered cells
     detect_scars:       compare HV with the earliest same-track pass in [start - scar_lookback_days,
                         latest pass - scar_min_gap_days]; a drop of >= scar_drop_db dB, averaged over
                         scar_smooth_cells x scar_smooth_cells cells, = burn scar
@@ -156,6 +158,42 @@ def nisar_provider(*, lookback_days: float = 30.0, detect_scars: bool = True, sc
     cache_dir:          where regridded windows are cached (None = no cache)
     Needs EARTHDATA_USERNAME / EARTHDATA_PASSWORD in real_fires/.env for remote reads.
     """
+    def one_pass(p: Pass, gcov_passes: list[Pass], grid: TargetGrid, bbox) -> tuple[dict[str, np.ndarray], dict] | None:
+        """All contract variables from one pass (its own scar reference and SME2). None if it misses the grid."""
+        gcov = read_pass(p, GCOV_GROUP, ["HHHH", "HVHV", "mask"], grid, prepare=_gcov_valid, cache_dir=cache_dir)
+        hh, hv = gcov["HHHH"], gcov["HVHV"]
+        if not np.isfinite(hv).any():
+            return None
+        info = {"time": p.time_utc.isoformat(), "track": p.track_id, "gcov": ",".join(p.file_ids)}
+
+        hv_ref = None
+        if detect_scars:
+            refs = [r for r in gcov_passes if r.track_id == p.track_id
+                    and r.time_utc <= p.time_utc - pd.Timedelta(days=scar_min_gap_days)]
+            if refs:
+                ref = refs[0]   # earliest in the window: scars from the whole season so far
+                hv_ref = read_pass(ref, GCOV_GROUP, ["HVHV", "mask"], grid, prepare=_gcov_valid,
+                                   cache_dir=cache_dir)["HVHV"]
+                info["scar_reference"] = ref.time_utc.isoformat()
+            else:
+                info["scar_reference"] = "none (no earlier same-track pass): scars not detected"
+        layers = layers_from_backscatter(hh, hv, hv_ref, scar_drop_db, scar_smooth_cells)
+
+        sm = np.full(grid.shape, np.nan, np.float32)
+        vwc = np.full(grid.shape, np.nan, np.float32)
+        sme2 = [s for s in group_passes(search("SME2", bbox, p.time_utc - pd.Timedelta(minutes=10),
+                                               p.time_utc + pd.Timedelta(minutes=10)))
+                if s.track_id == p.track_id]
+        if sme2:
+            s = read_pass(sme2[0], SME2_GROUP, SME2_DATASETS, grid, prepare=_sme2_valid, cache_dir=cache_dir)
+            sm, vwc = s["soil_moisture"], s["vwc"]
+            water = np.nan_to_num(s["water_fraction"], nan=0.0) >= 0.5
+            layers["nisar_burned"][water & (layers["nisar_burned"] >= 0)] = 1
+            info["sme2"] = ",".join(sme2[0].file_ids)
+        else:
+            info["sme2"] = "none for this pass: soil moisture / VWC not provided"
+        return {**layers, "nisar_soil_moisture": sm, "nisar_vwc_kg_m2": vwc}, info
+
     def get_nisar(request: Any) -> xr.Dataset | None:
         grid = TargetGrid.from_request(request)
         t = _utc(request.time_utc)
@@ -166,46 +204,40 @@ def nisar_provider(*, lookback_days: float = 30.0, detect_scars: bool = True, sc
         if not recent:
             log.info("no NISAR GCOV pass in the %s days before %s", lookback_days, t)
             return None
-        latest = recent[-1]
-        attrs = {"crs": grid.crs, "nisar_pass_utc": latest.time_utc.isoformat(), "nisar_track": latest.track_id,
-                 "nisar_gcov_granules": ",".join(latest.file_ids)}
 
-        gcov = read_pass(latest, GCOV_GROUP, ["HHHH", "HVHV", "mask"], grid, prepare=_gcov_valid, cache_dir=cache_dir)
-        hh, hv = gcov["HHHH"], gcov["HVHV"]
-        if not np.isfinite(hv).any():
-            log.info("NISAR pass %s does not cover the area", latest.time_utc)
+        # Newest pass first; older passes in the lookback window only fill cells no newer pass saw (swath edges,
+        # partial frames). A cell takes ALL its variables from one pass, so radar, scars and soil moisture of a
+        # cell are always from the same date. Stops as soon as every cell is covered.
+        data: dict[str, np.ndarray] | None = None
+        used: list[dict] = []
+        for p in reversed(recent):
+            if data is not None and not (data["nisar_burned"] == -1).any():
+                break
+            got = one_pass(p, gcov_passes, grid, bbox)
+            if got is None:
+                continue
+            layers, info = got
+            if data is None:
+                data, fill = layers, layers["nisar_burned"] != -1
+            else:
+                fill = (data["nisar_burned"] == -1) & (layers["nisar_burned"] != -1)
+                for k in SPREAD_MODEL_VARIABLES:
+                    data[k][fill] = layers[k][fill]
+            info["cells_pct"] = round(float(100 * fill.mean()), 1)
+            if info["cells_pct"] > 0:
+                used.append(info)
+        if data is None:
+            log.info("no NISAR pass in the %s days before %s covers the area", lookback_days, t)
             return None
 
-        hv_ref = None
-        if detect_scars:
-            refs = [p for p in gcov_passes if p.track_id == latest.track_id
-                    and p.time_utc <= latest.time_utc - pd.Timedelta(days=scar_min_gap_days)]
-            if refs:
-                ref = refs[0]   # earliest in the window: scars from the whole season so far
-                hv_ref = read_pass(ref, GCOV_GROUP, ["HVHV", "mask"], grid, prepare=_gcov_valid,
-                                   cache_dir=cache_dir)["HVHV"]
-                attrs["nisar_scar_reference_utc"] = ref.time_utc.isoformat()
-            else:
-                attrs["nisar_scar_reference_utc"] = "none (no earlier same-track pass): scars not detected"
-        layers = layers_from_backscatter(hh, hv, hv_ref, scar_drop_db, scar_smooth_cells)
-
-        sm = np.full(grid.shape, np.nan, np.float32)
-        vwc = np.full(grid.shape, np.nan, np.float32)
-        sme2 = [p for p in group_passes(search("SME2", bbox, latest.time_utc - pd.Timedelta(minutes=10),
-                                               latest.time_utc + pd.Timedelta(minutes=10)))
-                if p.track_id == latest.track_id]
-        if sme2:
-            s = read_pass(sme2[0], SME2_GROUP, SME2_DATASETS, grid, prepare=_sme2_valid, cache_dir=cache_dir)
-            sm, vwc = s["soil_moisture"], s["vwc"]
-            water = np.nan_to_num(s["water_fraction"], nan=0.0) >= 0.5
-            layers["nisar_burned"][water & (layers["nisar_burned"] >= 0)] = 1
-            attrs["nisar_sme2_granules"] = ",".join(sme2[0].file_ids)
-        else:
-            attrs["nisar_sme2_granules"] = "none for this pass: soil moisture / VWC not provided"
-        attrs["nisar_coverage_pct"] = float(100 * np.isfinite(hv).mean())
-
+        newest = used[0]
+        attrs = {"crs": grid.crs, "nisar_pass_utc": newest["time"], "nisar_track": newest["track"],
+                 "nisar_gcov_granules": newest["gcov"], "nisar_scar_reference_utc": newest.get("scar_reference", ""),
+                 "nisar_sme2_granules": newest["sme2"],
+                 "nisar_passes_used": "; ".join(f"{u['time']} {u['track']} ({u['cells_pct']}% of cells)" for u in used),
+                 "nisar_passes_detail": json.dumps(used),
+                 "nisar_coverage_pct": float(100 * (data["nisar_burned"] != -1).mean())}
         coords = {"y": ("y", grid.y), "x": ("x", grid.x)}
-        data = {**layers, "nisar_soil_moisture": sm, "nisar_vwc_kg_m2": vwc}
         return xr.Dataset({k: (("y", "x"), data[k]) for k in SPREAD_MODEL_VARIABLES}, coords=coords, attrs=attrs)
 
     return get_nisar
