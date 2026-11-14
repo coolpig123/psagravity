@@ -40,6 +40,8 @@ real_fires/                                              # ground truth from rea
   docs/                                                  # fires_summary.md / .csv
   app/                                                   # the site
   .env (not committed), .env.example, requirements*.txt, pyproject.toml
+gee_layers/                                              # model inputs from Google Earth Engine (package geelayers)
+  src/geelayers/, tests/, data/ (outputs, not committed), .env (EE_PROJECT), README.md
 ```
 
 Never put new files in the repo root. Every output goes in a folder with a clear name (real_fires/app/,
