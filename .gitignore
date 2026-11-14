@@ -6,4 +6,6 @@ spread_model/data/
 __pycache__/
 *.pyc
 *.egg-info/
+*.tif
+*.nc
 real_fires/data/fires/crosswhite/processed/fire_points.csv
