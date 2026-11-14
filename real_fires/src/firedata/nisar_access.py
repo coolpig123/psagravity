@@ -367,7 +367,10 @@ def _read_window(source, group: str, datasets: list[str], grid: TargetGrid, prep
             epsg = _epsg(g)
             x, y = g["xCoordinates"][:].astype(np.float64), g["yCoordinates"][:].astype(np.float64)
             win = _grid_window(x, y, epsg, grid)
-            arrays = None if win is None else {k: _fill_to_nan(g[k][win], g[k]) for k in datasets}
+            arrays = None
+            if win is not None:
+                shape = (len(y[win[0]]), len(x[win[1]]))
+                arrays = {k: _fill_to_nan(g[k][win], g[k]) if k in g else _missing(source, k, shape) for k in datasets}
     else:
         got = _remote_window(str(source), group, datasets, grid, chunk_dir)
         arrays, x, y, epsg, win = got if got is not None else (None, None, None, None, None)
@@ -382,6 +385,12 @@ def _read_window(source, group: str, datasets: list[str], grid: TargetGrid, prep
     src_res = abs(float(sx[1] - sx[0]))
     mode = how if how != "auto" else ("mean" if src_res * 1.5 <= grid.res else "sample")
     return (_mean_to_grid if mode == "mean" else _sample_to_grid)(arrays, sx, sy, epsg, grid)
+
+
+def _missing(source, name: str, shape: tuple[int, int]) -> np.ndarray:
+    """A dataset this granule does not have (older product versions lack some): no data, not an error."""
+    log.warning("%s has no dataset %s: treated as no data", Path(str(source)).name, name)
+    return np.full(shape, np.nan, np.float32)
 
 
 # ---- remote reads: all chunks of the window in parallel, cached per granule -----------------------
@@ -413,7 +422,8 @@ def _meta(f_open: Callable[[], h5py.File], group: str, datasets: list[str], chun
         g = f_open()[group]
         m = m or {"epsg": _epsg(g), "x": _coords(g["xCoordinates"]), "y": _coords(g["yCoordinates"]), "datasets": {}}
         for k in datasets:
-            m["datasets"].setdefault(k, _dataset_meta(g[k]))
+            if k not in m["datasets"]:
+                m["datasets"][k] = _dataset_meta(g[k]) if k in g else None   # None: not in this granule
         meta[group] = m
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -471,6 +481,8 @@ def _remote_window(url: str, group: str, datasets: list[str], grid: TargetGrid, 
         missing, direct = [], []
         for k in datasets:
             dm = m["datasets"][k]
+            if dm is None:
+                continue
             if dm["chunks"] is None or len(dm["shape"]) != 2 or set(dm["filters"]) - {_DEFLATE, _SHUFFLE}:
                 direct.append(k)                    # contiguous / other compression: let h5py read it
                 continue
@@ -506,6 +518,9 @@ def _remote_window(url: str, group: str, datasets: list[str], grid: TargetGrid, 
         arrays = {}
         for k in datasets:
             dm = m["datasets"][k]
+            if dm is None:
+                arrays[k] = _missing(url, k, (len(y[rs]), len(x[cs])))
+                continue
             if k in direct:
                 a = f_open()[group][k][rs, cs]
             else:
