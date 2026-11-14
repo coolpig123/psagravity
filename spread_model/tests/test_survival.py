@@ -104,6 +104,14 @@ def test_predict_arrival_adds_layers(toy_model):
     assert res.attrs["arrival_area_48h_km2"] >= res.attrs["arrival_area_6h_km2"]
     assert "XGBoost AFT" in res.attrs["arrival_model"]
 
+    water = make_ds(u=5.0)
+    lc = np.full((N, N), 20, np.int16)
+    lc[:, C + 2:] = 80                                                  # a lake east of the fire
+    water["landcover"] = (("y", "x"), lc)
+    res = predict_arrival(spread_probabilities(water), T0, model=toy_model)
+    assert np.isinf(res["arrival_h"].values[C, C + 3]) and res["p_arrive_48h"].values[C, C + 3] == 0
+    assert res["p_arrive_48h"].values[C, C - 3] > 0
+
 
 def test_payload_with_and_without_arrival_model(toy_model):
     out = predict_payload({**BODY, "use_nisar": False, "steps": 3}, predict_fn=fake_predict({}),

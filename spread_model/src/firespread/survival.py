@@ -174,12 +174,15 @@ def load_model(path: Path = MODEL_PATH) -> ArrivalModel:
 
 def predict_arrival(result: xr.Dataset, time_utc=None, model: ArrivalModel | None = None) -> xr.Dataset:
     """Add arrival_h (median hours until the fire reaches the cell) and p_arrive_<h>h (chance it does within
-    h hours, h in HORIZONS_H) to a spread_probabilities() / simulate_spread() result. Burning cells -> NaN.
+    h hours, h in HORIZONS_H) to a spread_probabilities() / simulate_spread() result. Burning cells -> NaN;
+    cells that cannot burn -> arrival inf, chance 0.
     `time_utc` (the start) is not a feature: the weather already in `result` is the start time's."""
     model = model or load_model()
     burning = result["burning"].values.astype(bool)
     feats = cell_features(result, time_utc)
     median = model.median_hours(feature_matrix(feats)).reshape(burning.shape).astype(np.float32)
+    # burning now -> NaN; cannot burn (water, bare, built-up, burn scar, no fuel; mask_reason) -> never reached
+    median[feats["can_burn"] == 0] = np.inf
     median[burning] = np.nan
     out = result.copy()
     out["arrival_h"] = (("y", "x"), median, {"units": "h", "description": "median time until the fire arrives "
