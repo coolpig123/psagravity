@@ -201,3 +201,47 @@ def test_calibration_fixes_overconfidence_and_keeps_order():
     for a, b in zip(HORIZONS_H, HORIZONS_H[1:]):
         assert (probs[a] <= probs[b] + 1e-9).all()
     assert (probs[HORIZONS_H[-1]] <= probs["ever"] + 1e-9).all()
+
+
+def test_burn_scars_are_walls():
+    ds = make_ds()
+    scar = np.zeros((N, N), np.int16)
+    scar[:, C + 2] = 1                                                  # an old Sentinel-2 burn scar east of the fire
+    ds["s2_burned"] = (("y", "x"), scar)
+    f = cell_features(spread_probabilities(ds))
+    assert np.isnan(f["path_steps"][C, C + 3])                          # no fuel in the scar: nothing beyond it
+
+
+def test_path_rate_is_not_clipped():
+    slow = cell_features(spread_probabilities(make_ds(u=10.0)))["path_steps"][C, C + 4]
+    fast = cell_features(spread_probabilities(make_ds(u=20.0)))["path_steps"][C, C + 4]
+    assert fast < slow                                                  # clipped to 1, both would be 4 steps
+    f = cell_features(spread_probabilities(make_ds(u=20.0)))
+    diag, straight = f["path_steps"][C - 3, C + 3] / (300 * np.sqrt(2)), f["path_steps"][C, C + 3] / 300
+    # cost per metre: a 45-degree front must not be faster than a straight one along the wind's own direction
+    assert diag >= straight - 1e-9
+
+
+def test_physics_only_model_round_trips(tmp_path):
+    df, t, burned = toy_samples()
+    model = fit(df, sigma=0.4, rounds=0)                                # anchor lines, no trees
+    assert model.cure is None and model.time is None and model.anchor["time"][1] > 0 > model.anchor["cure"][1]
+    X = df[list(FEATURES)].to_numpy(np.float32)
+    med = model.median_if_burns(X)
+    far, near = df["path_len_m"] > 15000, df["path_len_m"] < 2000
+    assert med[far].min() > med[near].max() * 0.5                       # keeps growing with path cost
+    model.meta = {"trained_utc": "test", "fires": ["toy"]}
+    model.save(tmp_path / "m.json")
+    assert not (tmp_path / "m.json").exists()                            # no tree files for a physics-only model
+    again = ArrivalModel.load(tmp_path / "m.json")
+    assert again.cure is None and np.allclose(again.median_if_burns(X[:20]), med[:20])
+
+
+def test_calibration_has_no_floor_from_unreachable_cells():
+    df, _, _ = toy_samples(seed=2)
+    df.loc[df.index[:400], "path_steps"] = np.nan                        # unreachable, some of them burned
+    model = fit(df, sigma=0.4, rounds=30)
+    cal = survival.fit_calibration([(model, df)])
+    xs, ys = cal["ever"]
+    assert xs == sorted(xs) and ys == sorted(ys) and xs.count(0.0) <= 1
+    assert np.interp(1e-4, xs, ys) < 0.05                                # a raw ~0 stays ~0
