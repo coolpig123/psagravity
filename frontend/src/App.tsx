@@ -1,12 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
+import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
 
-const COLOR = '#e4572e'
+const COLOR = '#d62828' // brand red, same as the title and main buttons
+
+// OpenStreetMap standard tiles. Usage policy (https://operations.osmfoundation.org/policies/tiles/):
+// light use only and a visible "© OpenStreetMap contributors" credit (see the credit link below the map).
+const OSM_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 19,
+    },
+  },
+  layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+}
 const MAX_AREA_KM2 = 400 // above this the area is shown in red
 const DEFAULT_START = '2026-08-09T21:00Z' // Bug Fire, first afternoon: easy to test with
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -89,11 +105,14 @@ function toGeoJSON(points: Point[], mode: Mode): GeoJSON.FeatureCollection {
     })
   } else {
     // Outline closed back to the first point, so the shape always looks like a polygon.
-    if (points.length >= 2) {
+    // One line per edge: the dash pattern restarts at each corner, so moving or adding a point
+    // only shifts the dashes of the edges touching it (one long line would shift them all).
+    const edges = points.length === 2 ? 1 : points.length >= 3 ? points.length : 0
+    for (let i = 0; i < edges; i++) {
       features.push({
         type: 'Feature',
         properties: {},
-        geometry: { type: 'LineString', coordinates: [...points, points[0]] },
+        geometry: { type: 'LineString', coordinates: [points[i], points[(i + 1) % points.length]] },
       })
     }
     // Each point carries its outline index, so it can be picked up and dragged.
@@ -111,6 +130,7 @@ function App() {
   const [points, setPoints] = useState<Point[]>([]) // outline order
   const [history, setHistory] = useState<Point[][]>([]) // outline before each add / move, for Undo
   const [mode, setMode] = useState<Mode>('idle')
+  const [showRegions, setShowRegions] = useState(false)
   const modeRef = useRef(mode)
   modeRef.current = mode
   const pointsRef = useRef(points)
@@ -124,7 +144,7 @@ function App() {
   useEffect(() => {
     const map = new maplibregl.Map({
       container: container.current!,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: OSM_STYLE,
       center: [0, 0],
       zoom: 1,
       maplibreLogo: false,
@@ -140,6 +160,18 @@ function App() {
     mapRef.current = map
 
     map.on('load', () => {
+      // Where get_fire_inputs has full data (green) or not (red); built by backend/make_regions.py.
+      map.addSource('regions', { type: 'geojson', data: '/regions.geojson' })
+      map.addLayer({
+        id: 'regions-fill',
+        type: 'fill',
+        source: 'regions',
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-color': ['case', ['get', 'available'], '#00ff00', '#ff0000'],
+          'fill-opacity': 0.3,
+        },
+      })
       map.addSource('polygon', { type: 'geojson', data: toGeoJSON([], 'idle') })
       map.addLayer({
         id: 'polygon-fill',
@@ -148,19 +180,32 @@ function App() {
         filter: ['==', ['geometry-type'], 'Polygon'],
         paint: { 'fill-color': COLOR, 'fill-opacity': 0.25 },
       })
+      // Solid outline once locked (Polygon), dashed while still drawing (LineString).
       map.addLayer({
         id: 'polygon-line',
         type: 'line',
         source: 'polygon',
-        filter: ['!=', ['geometry-type'], 'Point'],
+        filter: ['==', ['geometry-type'], 'Polygon'],
         paint: { 'line-color': COLOR, 'line-width': 2 },
+      })
+      map.addLayer({
+        id: 'polygon-draft',
+        type: 'line',
+        source: 'polygon',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        paint: { 'line-color': COLOR, 'line-width': 2, 'line-dasharray': [3, 2] },
       })
       map.addLayer({
         id: 'polygon-points',
         type: 'circle',
         source: 'polygon',
         filter: ['==', ['geometry-type'], 'Point'],
-        paint: { 'circle-color': COLOR, 'circle-radius': 5 },
+        paint: {
+          'circle-color': COLOR,
+          'circle-radius': 5,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
       })
       // Chance each cell burns within the simulated steps: yellow -> orange -> red, under the polygon outline.
       // Low chances are drawn lighter, so the likely path stands out.
@@ -246,6 +291,12 @@ function App() {
     source?.setData(toGeoJSON(points, mode))
   }, [points, mode, loaded])
 
+  // Show or hide the available / unavailable regions.
+  useEffect(() => {
+    if (!loaded) return
+    mapRef.current?.setLayoutProperty('regions-fill', 'visibility', showRegions ? 'visible' : 'none')
+  }, [showRegions, loaded])
+
   // Crosshair cursor while drawing.
   useEffect(() => {
     if (mapRef.current) mapRef.current.getCanvas().style.cursor = mode === 'drawing' ? 'crosshair' : ''
@@ -290,6 +341,16 @@ function App() {
   }
 
   const area = areaKm2(points)
+
+  // One-line hint for the next step, shown under the toolbar.
+  const hint =
+    mode === 'idle'
+      ? 'Click Draw to start a polygon.'
+      : mode === 'locked'
+        ? 'Set the start time (UTC) and press Predict to see where the fire is likely to spread, or Clear to start over.'
+        : points.length < 3
+          ? 'Click the map to add points (at least 3). Drag a point to move it.'
+          : 'Click to add more points, drag a point to move it, or press Finish to lock the polygon.'
 
   // Send the finished polygon to the Python server, which prints its points.
   const extract = async () => {
@@ -339,30 +400,46 @@ ${err instanceof Error ? err.message : err}`)
 
   return (
     <div className="page">
+      <header className="topbar">
+        <div>Psapyro</div>
+        <div className="tagline">Predict the spread, protect the people.</div>
+      </header>
       <div className="toolbar">
-        <button onClick={draw} disabled={mode === 'drawing'}>Draw</button>
-        <button onClick={finish} disabled={mode !== 'drawing' || points.length < 3}>Finish</button>
-        <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}>Undo</button>
-        <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}>Clear</button>
-        <button onClick={extract} disabled={mode !== 'locked'}>Extract Data</button>
+        <button className="primary" onClick={draw} disabled={mode === 'drawing'}><Pencil />Draw</button>
+        <button onClick={finish} disabled={mode !== 'drawing' || points.length < 3}><Check />Finish</button>
+        <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}><Undo2 />Undo</button>
+        <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}><Trash2 />Clear</button>
+        <button onClick={extract} disabled={mode !== 'locked'}><Download />Extract Data</button>
         <label className="start">
           Start (UTC)
           <input value={start} onChange={(e) => setStart(e.target.value)} placeholder={DEFAULT_START} size={18} />
         </label>
         <button
-          className="predict"
+          className="primary"
           onClick={predict}
           disabled={mode !== 'locked' || area > MAX_AREA_KM2 || predicting || !start.trim()}
         >
+          <Flame />
           {predicting ? 'Predicting…' : 'Predict'}
         </button>
         {mode !== 'idle' && (
           <span className={`area ${area > MAX_AREA_KM2 ? 'too-big' : 'ok'}`}>
+            <Ruler />
             {area.toLocaleString('en-US', { maximumFractionDigits: 1 })} km²
           </span>
         )}
       </div>
-      <div ref={container} className="map" />
+      <div className="hint">{hint}</div>
+      <div className="map-wrap">
+        <div ref={container} className="map" />
+        <a className="credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+          © OpenStreetMap contributors
+        </a>
+      </div>
+      <label className="regions">
+        <input type="checkbox" checked={showRegions} onChange={(e) => setShowRegions(e.target.checked)} />
+        regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data
+      </label>
       <div className="panel">
         {predicting && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}
         {error && <p className="error">Prediction failed: {error}</p>}
