@@ -5,7 +5,7 @@ import pytest
 
 from geelayers import fetch
 from geelayers.api import _add_wind, _empty_dataset, regrid
-from geelayers.derive import slope_aspect, wind_speed_dir
+from geelayers.derive import decode_evc, slope_aspect, wind_speed_dir
 from geelayers.grid import Grid, utm_epsg
 from geelayers.layers import LAYERS, VARIABLES, WEATHER
 
@@ -76,6 +76,12 @@ def test_slope_aspect_plane():
     assert np.isnan(aspect).all()
 
 
+def test_decode_evc():
+    lifeform, cover = decode_evc(np.array([101, 109, 111, 125, 129, 11, 31, 100, -1]))
+    assert lifeform.tolist() == [1, 1, 2, 3, 3, 0, 0, 0, -1]
+    assert cover[:5].tolist() == [15, 95, 15, 55, 95] and np.isnan(cover[5:]).all()
+
+
 def test_wind_conventions():
     speed, d = wind_speed_dir(np.array([5.0, 0.0, -3.0, 0.0]), np.array([0.0, 5.0, 0.0, -4.0]))
     assert np.allclose(speed, [5, 5, 3, 4])
@@ -127,7 +133,7 @@ def test_regrid_interpolates_and_recomputes_wind():
 
 def test_every_variable_is_documented():
     names = {v for l in LAYERS.values() for v in l.variables} | {v for w in WEATHER.values() for v in w.variables}
-    names |= {"slope_deg", "aspect_deg", "wind_speed_ms", "wind_dir_deg"}
+    names |= {"slope_deg", "aspect_deg", "wind_speed_ms", "wind_dir_deg", "fuel_lifeform", "cover_pct"}
     assert names <= set(VARIABLES)
 
 

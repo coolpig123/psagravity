@@ -38,7 +38,7 @@ grid = Grid.from_point(lat=39.727395, lon=-120.0372941, radius_km=20, res_m=100)
 # 2. Everything the model needs at the start time (only data from BEFORE that time is used)
 env = get_layers(grid, time="2026-08-08T22:30Z")
 env["slope_deg"].values          # numpy (rows, cols), row 0 = north
-env["fuel_model"].values         # int16 class codes, -1 = no data
+env["fuel_lifeform"].values      # int16: 0 none, 1 tree, 2 shrub, 3 grass; -1 = no data
 
 # 3. Hourly weather while the fire runs. Fetch it coarse (fast), then interpolate to the model grid
 wx = get_weather(grid.with_resolution(1000), "2026-08-08T22:00Z", "2026-08-13T00:00Z", source="rtma")
@@ -72,7 +72,7 @@ Output contract (all functions):
 |---|---|---|---|
 | `terrain` | NASADEM 30 m | global | `elevation_m`, `slope_deg`, `aspect_deg` |
 | `landcover` | ESA WorldCover 2021, 10 m | global | `landcover` (class) |
-| `fuel_model` | LANDFIRE FBFM40 (LF 1.4.0, 2016), 30 m | US | `fuel_model` (Scott & Burgan 40) |
+| `vegetation_cover` | LANDFIRE EVC (LF 1.4.0, 2014), 30 m | US | `evc` (class), `fuel_lifeform` (tree / shrub / grass), `cover_pct` |
 | `vegetation` | Sentinel-2 SR, 30-day median before `time` | global | `ndvi`, `ndmi` |
 | `fuel_dryness` | gridMET daily, 4 km | US | `fm100_pct`, `fm1000_pct`, `erc`, `burning_index`, `vpd_kpa`, `rh_min_pct`, `tmax_c`, `precip_daily_mm` |
 | `weather` | see sources below, latest hour at or before `time` | | as below |
@@ -84,7 +84,7 @@ Output contract (all functions):
 | `gfs` | NOAA GFS 0.25° forecast | global | live predictions (future hours) |
 
 Every weather source gives `temp_c`, `rh_pct`, `wind_u_ms`, `wind_v_ms`, `wind_speed_ms`, `wind_dir_deg`.
-`rtma` adds `gust_ms` and `precip_mm`. `era5_land` adds `precip_mm` and `soil_moisture`.
+`rtma` and `gfs` add `gust_ms` and `precip_mm`. `era5_land` adds `precip_mm` and `soil_moisture`.
 Switching source therefore needs no change in the model code.
 
 Conventions worth knowing:
@@ -92,7 +92,16 @@ Conventions worth knowing:
   The fire is pushed toward `(wind_dir_deg + 180) % 360`; or use `wind_u_ms` / `wind_v_ms` (toward east / north).
 - `slope_deg` / `aspect_deg` are computed from `elevation_m` at the grid's own cell size, which is
   the scale the automaton sees between neighbours. Aspect is the direction the slope faces.
+- `fuel_lifeform` and `cover_pct` map directly onto the vegetation-type and density factors (p_veg, p_den)
+  of the Alexandridis model.
+- The public Earth Engine catalog has **no LANDFIRE fuel-model (FBFM40) layer**. Its LANDFIRE layers are
+  version 1.4.0 (2014), so they miss recent burn scars. For current fuel state, use `ndvi` / `ndmi`
+  (Sentinel-2, last 30 days) and, later, NISAR.
 - Units for every variable: `python -m geelayers list` or `geelayers.VARIABLES`.
+
+Live check on the Bug Fire (2026-11-14): 40 x 40 km at 100 m, all layers at ignition took 20 s with no
+missing cells, and 98 hours of RTMA weather took 4 s. At the ignition cell the values were: 100-h fuel
+moisture 4.7 %, ERC 90, 35 °C, RH 17 %, and a west wind (278°) at 3.2 m/s.
 
 ## Adding a layer
 
@@ -104,7 +113,7 @@ checks this). The download, tiling, grid and NetCDF output work without any othe
 
 - Requests are split into tiles and band groups of at most 32 MB and run in parallel. A 40 x 40 km grid at
   100 m (400 x 400 cells) is a few requests, and a whole-fire box at 30 m is many but still works.
-- `fuel_model` and `fuel_dryness` cover the US only. For Europe, use `layers=("terrain", "landcover",
+- `vegetation_cover` and `fuel_dryness` cover the US only. For Europe, use `layers=("terrain", "landcover",
   "vegetation", "weather")` with `weather_source="era5_land"`.
 - Each dataset has its own latency: RTMA about 1 h, gridMET 1-2 days, ERA5-Land about 5 days. If data for a
   time does not exist yet, the call raises a `LookupError` that says so instead of returning stale data.

@@ -19,6 +19,23 @@ def slope_aspect(elevation: np.ndarray, res_m: float) -> tuple[np.ndarray, np.nd
     return slope.astype(np.float32), aspect.astype(np.float32)
 
 
+def decode_evc(evc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """LANDFIRE EVC codes -> (fuel_lifeform, cover_pct).
+
+    lifeform: 1 tree (101-109), 2 shrub (111-119), 3 herb (121-129), 0 anything else (water, developed,
+    crops, barren, sparse), -1 no data. cover_pct is the midpoint of the 10% class (15 ... 95), NaN otherwise.
+    """
+    evc = np.asarray(evc)
+    lifeform = np.zeros(evc.shape, np.int16)
+    cover = np.full(evc.shape, np.nan, np.float32)
+    for form, base in ((1, 100), (2, 110), (3, 120)):
+        m = (evc > base) & (evc < base + 10)
+        lifeform[m] = form
+        cover[m] = (evc[m] - base) * 10 + 5
+    lifeform[evc < 0] = -1
+    return lifeform, cover
+
+
 def wind_speed_dir(u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Wind speed (m/s) and meteorological direction (degrees the wind blows FROM, clockwise from north).
 

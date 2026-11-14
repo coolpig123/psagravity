@@ -25,8 +25,12 @@ VARIABLES: dict[str, tuple[str, str]] = {
     # land cover / fuels
     "landcover": ("class", "ESA WorldCover 2021 class: 10 tree, 20 shrub, 30 grass, 40 crop, 50 built, "
                            "60 bare, 70 snow/ice, 80 water, 90 wetland, 95 mangrove, 100 moss; -1 = no data"),
-    "fuel_model": ("class", "LANDFIRE Scott & Burgan 40 fuel model code (FBFM40, LF 1.4.0, 2016; US only); "
-                            "-1 = no data"),
+    "evc": ("class", "LANDFIRE Existing Vegetation Cover code (LF 1.4.0, ~2014; US only): 101-109 tree, "
+                     "111-119 shrub, 121-129 herb cover in 10% steps; other codes = water, developed, crops, "
+                     "barren (legend in the dataset's EVC_class_names); -1 = no data"),
+    "fuel_lifeform": ("class", "Dominant vegetation from evc: 0 = no wildland fuel, 1 = tree, 2 = shrub, 3 = herb/grass, "
+                               "-1 = no data"),
+    "cover_pct": ("%", "Vegetation cover of that lifeform from evc (class midpoint, 15-95); NaN when not wildland"),
     # vegetation state (Sentinel-2, cloud-masked median over the 30 days before `time`)
     "ndvi": ("1", "NDVI (B8, B4): greenness / amount of live vegetation"),
     "ndmi": ("1", "NDMI (B8, B11): vegetation water content; low = dry fuel"),
@@ -46,8 +50,8 @@ VARIABLES: dict[str, tuple[str, str]] = {
     "wind_v_ms": ("m/s", "10 m wind, northward component (toward north > 0)"),
     "wind_speed_ms": ("m/s", "10 m wind speed (derived from u, v)"),
     "wind_dir_deg": ("degrees", "10 m wind direction the wind blows FROM, clockwise from north (derived)"),
-    "gust_ms": ("m/s", "10 m wind gust (rtma only)"),
-    "precip_mm": ("mm", "Precipitation in the hour (rtma, era5_land)"),
+    "gust_ms": ("m/s", "Wind gust (rtma, gfs)"),
+    "precip_mm": ("mm", "Precipitation in the hour (gfs: instantaneous rate x 1 h)"),
     "soil_moisture": ("m3/m3", "Volumetric soil water, 0-7 cm (era5_land only)"),
 }
 
@@ -100,9 +104,11 @@ def _landcover(region, t):
     return ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("landcover"), {}
 
 
-def _fuel_model(region, t):
-    img = ee.ImageCollection("LANDFIRE/Fire/FBFM40/v1_4_0").filterBounds(region).mosaic()
-    return img.select("FBFM40").rename("fuel_model"), {}
+def _vegetation_cover(region, t):
+    # The public catalog has no LANDFIRE fuel-model (FBFM40) layer; EVC gives lifeform + density,
+    # which is what the Alexandridis p_veg / p_den factors need. fuel_lifeform / cover_pct are decoded locally.
+    img = ee.ImageCollection("LANDFIRE/Vegetation/EVC/v1_4_0").filter(ee.Filter.eq("system:index", "CONUS")).first()
+    return img.select("EVC").rename("evc"), {}
 
 
 _S2_KEEP = [4, 5, 6, 7, 11]   # SCL: vegetation, bare, water, unclassified, snow (drop cloud, shadow, saturated)
@@ -141,8 +147,8 @@ LAYERS: dict[str, Layer] = {l.name: l for l in [
           "global (60N-56S)", 30, False, False, ("elevation_m",), _terrain),
     Layer("landcover", "Land cover class", "ESA/WorldCover/v200", "global", 10, False, True,
           ("landcover",), _landcover),
-    Layer("fuel_model", "Scott & Burgan 40 fuel models", "LANDFIRE/Fire/FBFM40/v1_4_0", "CONUS", 30, False, True,
-          ("fuel_model",), _fuel_model),
+    Layer("vegetation_cover", "Vegetation lifeform and cover (fuel type / density); +fuel_lifeform, cover_pct",
+          "LANDFIRE/Vegetation/EVC/v1_4_0", "CONUS", 30, False, True, ("evc",), _vegetation_cover),
     Layer("vegetation", "Pre-`time` greenness and vegetation moisture (30-day median)",
           "COPERNICUS/S2_SR_HARMONIZED", "global", 20, True, False, ("ndvi", "ndmi"), _vegetation),
     Layer("fuel_dryness", "Daily fuel moisture and fire danger indices", "IDAHO_EPSCOR/GRIDMET", "CONUS", 4000,
@@ -185,7 +191,7 @@ def _era5_land(region, start, end, issued=None):
         return ee.Image.cat([t.rename("temp_c"), _rh(t, td),
                              img.select("u_component_of_wind_10m").rename("wind_u_ms"),
                              img.select("v_component_of_wind_10m").rename("wind_v_ms"),
-                             img.select("total_precipitation_hourly").multiply(1000).rename("precip_mm"),
+                             img.select("total_precipitation_hourly").multiply(1000).max(0).rename("precip_mm"),
                              img.select("volumetric_soil_water_layer_1").rename("soil_moisture")]
                             ).set("valid_time", img.get("system:time_start"))
     return (ee.ImageCollection("ECMWF/ERA5_LAND/HOURLY").filterBounds(region)
@@ -205,7 +211,9 @@ def _gfs(region, start, end, issued=None):
         return ee.Image.cat([img.select("temperature_2m_above_ground").rename("temp_c"),
                              img.select("relative_humidity_2m_above_ground").rename("rh_pct"),
                              img.select("u_component_of_wind_10m_above_ground").rename("wind_u_ms"),
-                             img.select("v_component_of_wind_10m_above_ground").rename("wind_v_ms")]
+                             img.select("v_component_of_wind_10m_above_ground").rename("wind_v_ms"),
+                             img.select("gust").rename("gust_ms"),
+                             img.select("precipitation_rate").multiply(3600).rename("precip_mm")]   # kg/m2/s -> mm/h
                             ).set("valid_time", img.get("forecast_time"))
     return (runs.filter(ee.Filter.eq("system:time_start", run_ms))
             .filter(ee.Filter.gte("forecast_time", _ms(start))).filter(ee.Filter.lt("forecast_time", _ms(end)))
@@ -219,5 +227,5 @@ WEATHER: dict[str, WeatherSource] = {w.name: w for w in [
                   "global (land)", 11000,
                   ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "precip_mm", "soil_moisture"), _era5_land),
     WeatherSource("gfs", "NOAA GFS 0.25 deg forecast: future weather for live predictions", "NOAA/GFS0P25",
-                  "global", 27800, ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms"), _gfs),
+                  "global", 27800, ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "gust_ms", "precip_mm"), _gfs),
 ]}
