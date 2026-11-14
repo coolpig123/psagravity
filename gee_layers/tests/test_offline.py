@@ -284,12 +284,25 @@ def test_cli_list(capsys):
     assert "terrain" in out and "rtma" in out and "wind_dir_deg" in out
 
 
-def test_init_without_project_explains(monkeypatch):
+def test_init_defaults_to_team_project_and_logs_in_once(monkeypatch):
     from geelayers import auth
+    calls = []
     monkeypatch.delenv("EE_PROJECT", raising=False)
+    monkeypatch.delenv("EE_SERVICE_ACCOUNT_KEY", raising=False)
     monkeypatch.setattr(auth, "_initialized", False)
-    with pytest.raises(RuntimeError, match="EE_PROJECT"):
-        auth.init()
+    monkeypatch.setattr(auth, "_has_saved_login", lambda: False)
+    monkeypatch.setattr(auth.ee, "Authenticate", lambda: calls.append("login"))
+    monkeypatch.setattr(auth.ee, "Initialize", lambda cred, project, opt_url: calls.append((cred, project)))
+    auth.init()
+    assert calls == ["login", ("persistent", auth.DEFAULT_PROJECT)]
+
+    def denied(*a, **k):
+        raise Exception("Caller does not have required permission to use project x")
+    monkeypatch.setattr(auth.ee, "Initialize", denied)
+    monkeypatch.setattr(auth, "_has_saved_login", lambda: True)
+    with pytest.raises(RuntimeError, match="IAM"):
+        auth.init(force=True)
+    monkeypatch.setattr(auth, "_initialized", False)
 
 
 def test_in_conus_and_weather_candidates():
