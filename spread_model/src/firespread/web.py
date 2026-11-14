@@ -9,7 +9,7 @@ backend/server.py serves it as POST /api/predict:
                    cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer.
                    With "arrival" (and a trained model, survival.py) also the cells with p_arrive_48h > MIN_PROB,
                    and per cell pe = chance the fire ever gets there, t50 = median hours until it arrives if it
-                   does, p6 / p12 / p24 / p48 = chance within 6 / 12 / 24 / 48 h (null for cells already burning),
+                   does (t25 / t75: its 25-75% range), p6 / p12 / p24 / p48 = chance within 6 / 12 / 24 / 48 h (null for cells already burning),
         "bounds":  [west, south, east, north] of the model grid,
         "summary": {main_direction, main_direction_deg, direction_strength, expected_new_area_km2,
                     weather_time_utc, weather_source, nisar_passes_used, nisar_coverage_pct, s2_clear_pct,
@@ -42,7 +42,7 @@ SUMMARY_KEYS = ("main_direction", "main_direction_deg", "direction_strength", "e
                 "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge",
                 "arrival_model", *(f"arrival_area_{h}h_km2" for h in HORIZONS_H))
 # cell properties for the arrival-time view: median hours + chance within each horizon (survival.py)
-ARRIVAL_PROPS = {"pe": "p_ever", "t50": "arrival_h", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
+ARRIVAL_PROPS = {"pe": "p_ever", "t50": "arrival_h", "t25": "arrival_h_q25", "t75": "arrival_h_q75", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
 
 
 def parse_request(body: dict) -> dict:

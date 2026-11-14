@@ -283,7 +283,9 @@ function App() {
         `<b>Chance of burning (CA steps):</b> ${fmtPct(q.p)}` +
         (arrival
           ? `<br><b>Chance the fire ever gets here:</b> ${fmtPct(q.pe)}` +
-            `<br><b>Median arrival, if it does:</b> ${fmtHours(q.t50)}` +
+            (q.t50 === null || q.t50 === undefined
+              ? '<br><b>Arrival, if it does:</b> no estimate (the chance hardly grows over 6–48 h)'
+              : `<br><b>Arrival, if it does:</b> median ${fmtHours(q.t50)} (half of the cases ${fmtHours(q.t25)} – ${fmtHours(q.t75)})`) +
             `<br><b>Chance within</b> 6 h ${fmtPct(q.p6)} · 12 h ${fmtPct(q.p12)} · 24 h ${fmtPct(q.p24)} · 48 h ${fmtPct(q.p48)}`
           : '')
       new maplibregl.Popup({ closeButton: true, maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map)
