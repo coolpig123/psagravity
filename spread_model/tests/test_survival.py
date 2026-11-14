@@ -175,7 +175,7 @@ def test_payload_with_and_without_arrival_model(toy_model):
     assert s["arrival"] is True and s["arrival_horizons_h"] == list(HORIZONS_H)
     assert s["n_cells"] <= s["n_map_cells"] == len(out["cells"]["features"])   # CA count vs squares on the map
     props = out["cells"]["features"][0]["properties"]
-    assert {"p", "pe", "t50", "p6", "p12", "p24", "p48"} <= set(props)
+    assert {"p", "pe", "t50", "t25", "t75", "p6", "p12", "p24", "p48"} <= set(props)
     json.dumps(out, allow_nan=False)
 
     def missing(r, t):
@@ -245,3 +245,39 @@ def test_calibration_has_no_floor_from_unreachable_cells():
     xs, ys = cal["ever"]
     assert xs == sorted(xs) and ys == sorted(ys) and xs.count(0.0) <= 1
     assert np.interp(1e-4, xs, ys) < 0.05                                # a raw ~0 stays ~0
+
+
+def test_unreachable_cells_are_exactly_never():
+    df, _, _ = toy_samples(seed=3)
+    df.loc[df.index[:100], "path_steps"] = np.nan
+    for rounds in (0, 20):
+        model = fit(df, sigma=0.4, rounds=rounds)
+        model.calibration = survival.fit_calibration([(model, df)])
+        X = df[list(FEATURES)].to_numpy(np.float32)
+        probs = model.probabilities(model.p_ever(X), model.median_if_burns(X))
+        for v in probs.values():
+            assert np.isfinite(v).all() and (v[:100] == 0).all()
+        s = survival.evaluate(model, df)
+        assert all(np.isfinite(s[f"brier_{h}h"]) for h in HORIZONS_H)
+        assert np.isfinite(survival._mean_brier(model, df))
+
+
+def test_arrival_quantiles_agree_with_the_chances(toy_model):
+    from scipy.stats import norm
+    pe = np.array([0.4, 0.4, 0.0, np.nan])
+    med = np.array([10.0, 200.0, 10.0, 10.0])
+    probs = {"ever": pe, **{h: pe * norm.cdf((np.log(h) - np.log(med)) / 1.0) for h in HORIZONS_H}}
+    q = survival.arrival_quantiles(probs)
+    assert q[0.5][:2] == pytest.approx([10.0, 200.0], rel=1e-3)        # exact for a log-normal, inside and beyond
+    assert q[0.25][0] == pytest.approx(10 * np.exp(-0.6745), rel=1e-3)
+    assert np.isinf(q[0.5][2]) and np.isnan(q[0.5][3])                   # never reached / burning
+
+    model = fit(toy_samples()[0], sigma=0.4, rounds=0)
+    model.calibration = survival.fit_calibration([(model, toy_samples(seed=4)[0])])
+    res = predict_arrival(spread_probabilities(make_ds(u=5.0)), T0, model=model)
+    m = np.isfinite(res["arrival_h"].values) & (res["p_ever"].values > 0)
+    # where the median is under 6 h, at least half of P(ever) has arrived by 6 h, and the reverse
+    p6, pe_ = res["p_arrive_6h"].values[m], res["p_ever"].values[m]
+    t50 = res["arrival_h"].values[m]
+    assert np.all((p6 >= 0.5 * pe_ - 1e-4) == (t50 <= 6 + 1e-3)) or np.allclose(p6 / pe_, 0.5, atol=1e-3)
+    assert (res["arrival_h_q25"].values[m] <= t50 + 1e-6).all() and (t50 <= res["arrival_h_q75"].values[m] + 1e-6).all()
