@@ -133,8 +133,148 @@ def test_regrid_interpolates_and_recomputes_wind():
 
 def test_every_variable_is_documented():
     names = {v for l in LAYERS.values() for v in l.variables} | {v for w in WEATHER.values() for v in w.variables}
-    names |= {"slope_deg", "aspect_deg", "wind_speed_ms", "wind_dir_deg", "fuel_lifeform", "cover_pct"}
+    names |= {"slope_deg", "aspect_deg", "wind_speed_ms", "wind_dir_deg", "fuel_lifeform", "cover_pct",
+              "initial_burned"}
     assert names <= set(VARIABLES)
+
+
+def test_grid_from_polygon_and_masks(tmp_path):
+    ring = [[-120.05, 39.72], [-120.02, 39.72], [-120.02, 39.74], [-120.05, 39.74], [-120.05, 39.72]]
+    hole = [[-120.04, 39.725], [-120.03, 39.725], [-120.03, 39.735], [-120.04, 39.735], [-120.04, 39.725]]
+    geojson = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring, hole]}, "properties": {}}
+    ]}
+    gj_file = tmp_path / "fire.geojson"
+    import json
+    gj_file.write_text(json.dumps(geojson), encoding="utf-8")
+
+    g = Grid.from_polygon(gj_file, buffer_km=2, res_m=100)
+    assert g.crs == "EPSG:32610"
+    mask = g.polygon_mask(gj_file)
+    assert mask.shape == g.shape and mask.dtype == np.int16
+    assert mask.sum() > 20
+    # Center of the hole is unburned (0), while inside outer ring away from hole is burned (1)
+    r_hole, c_hole = g.cell_of(39.73, -120.035)
+    r_ring, c_ring = g.cell_of(39.722, -120.045)
+    assert mask[r_hole, c_hole] == 0
+    assert mask[r_ring, c_ring] == 1
+
+    # Sub-cell tiny polygon still ignites its centroid cell
+    tiny = [[-120.0373, 39.7274], [-120.03729, 39.7274], [-120.03729, 39.72741], [-120.0373, 39.72741]]
+    tmask = g.polygon_mask(tiny)
+    assert tmask.sum() == 1
+    rt, ct = g.cell_of(39.727405, -120.037295)
+    assert tmask[rt, ct] == 1
+
+    # Point mask (single cell and radius)
+    pm1 = g.point_mask(*BUG)
+    assert pm1.sum() == 1 and pm1[g.cell_of(*BUG)] == 1
+    pm_rad = g.point_mask(*BUG, radius_m=250.0)
+    assert pm_rad.sum() > 10
+
+
+def test_get_fire_inputs_aligns_layers_weather_and_mask(monkeypatch, tmp_path):
+    from geelayers import api
+
+    def fake_get_layers(grid, time=None, layers=api.DEFAULT_LAYERS, weather_source="rtma"):
+        ds = _empty_dataset(grid)
+        ds["slope_deg"] = (("y", "x"), np.full(grid.shape, 12.0, np.float32), api._attrs("slope_deg"))
+        return ds
+
+    calls = {}
+
+    def fake_get_weather(grid, start, end, source="rtma", step_hours=1, issued=None):
+        calls.update(start=start, issued=issued)
+        ds = _empty_dataset(grid).assign_coords(time=pd.to_datetime(["2026-08-08T22:00", "2026-08-08T23:00"]))
+        ds["wind_u_ms"] = (("time", "y", "x"), np.full((2, *grid.shape), 4.0, np.float32), api._attrs("wind_u_ms"))
+        ds["wind_v_ms"] = (("time", "y", "x"), np.zeros((2, *grid.shape), np.float32), api._attrs("wind_v_ms"))
+        return _add_wind(ds)
+
+    monkeypatch.setattr(api, "get_layers", fake_get_layers)
+    monkeypatch.setattr(api, "get_weather", fake_get_weather)
+
+    poly = [[-120.04, 39.72], [-120.03, 39.72], [-120.03, 39.73], [-120.04, 39.73]]
+    ds = api.get_fire_inputs(polygon=poly, start="2026-08-08T22:30Z", hours=2, radius_km=3, res_m=100, weather_res_m=1000)
+    assert set(ds.dims) == {"time", "y", "x"}
+    assert ds["slope_deg"].shape == ds["initial_burned"].shape == (ds.sizes["y"], ds.sizes["x"])
+    assert ds["wind_u_ms"].shape == (2, ds.sizes["y"], ds.sizes["x"])
+    assert ds["initial_burned"].values.sum() > 0
+    assert np.allclose(ds["wind_speed_ms"].values, 4.0)
+    # weather starts at the top of the hour so it covers the start; GFS run chosen at start itself
+    assert calls["start"] == pd.Timestamp("2026-08-08T22:00Z")
+    assert calls["issued"] == pd.Timestamp("2026-08-08T22:30Z")
+
+    # exactly one fire must be given
+    with pytest.raises(ValueError, match="exactly one fire"):
+        api.get_fire_inputs(polygon=poly, point=BUG, start="2026-08-08T22:30Z")
+    with pytest.raises(ValueError, match="exactly one fire"):
+        api.get_fire_inputs(bbox=(-120.1, 39.7, -120.0, 39.8), start="2026-08-08T22:30Z")
+    # lat / lon swapped
+    with pytest.raises(ValueError, match="swapped"):
+        api.get_fire_inputs(point=BUG[::-1], start="2026-08-08T22:30Z")
+    with pytest.raises(ValueError, match="swapped"):
+        api.get_fire_inputs(polygon=[[39.72, -120.04], [39.72, -120.03], [39.73, -120.03]], start="2026-08-08T22:30Z")
+    # valid fire, but outside the given area
+    with pytest.raises(ValueError, match="outside the grid"):
+        api.get_fire_inputs(point=(40.5, -121.0), bbox=(-120.1, 39.7, -120.0, 39.8), start="2026-08-08T22:30Z")
+
+    # Also test CLI bundle command writes NetCDF
+    from geelayers.__main__ import main
+    out_nc = tmp_path / "bundle.nc"
+    main(["bundle", "--point", str(BUG[0]), str(BUG[1]), "--radius-km", "2",
+          "--start", "2026-08-08T22:30Z", "--hours", "2", "--out", str(out_nc)])
+    assert out_nc.exists()
+
+
+def _square(lon, lat, d):
+    return [[lon, lat], [lon + d, lat], [lon + d, lat + d], [lon, lat + d], [lon, lat]]
+
+
+def _feature(ring, **props):
+    return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]}, "properties": props}
+
+
+def test_perimeter_time_series_uses_perimeter_at_start():
+    from geelayers.perimeter import resolve_perimeter
+    # FEDS-like: growing perimeters, one per step, each with obs_time_utc
+    fc = {"type": "FeatureCollection", "features": [
+        _feature(_square(-120.04, 39.72, 0.01), step_utc="2026-08-09T00:00:00Z", obs_time_utc="2026-08-09T09:30:00Z"),
+        _feature(_square(-120.05, 39.71, 0.03), step_utc="2026-08-09T12:00:00Z", obs_time_utc="2026-08-09T20:30:00Z"),
+        _feature(_square(-120.10, 39.65, 0.20), step_utc="2026-08-10T00:00:00Z", obs_time_utc="2026-08-10T09:30:00Z"),
+    ]}
+    geom, meta = resolve_perimeter(fc, "2026-08-09T21:00Z")
+    assert geom is fc["features"][1]
+    assert meta["initial_perimeter_time_utc"] == "2026-08-09T20:30:00+00:00"
+    assert "obs_time_utc" in meta["initial_perimeter"]
+    with pytest.raises(ValueError, match="first perimeter"):
+        resolve_perimeter(fc, "2026-08-09T05:00Z")
+    geom, _ = resolve_perimeter(fc, "2026-08-09T21:00Z", time_key="step_utc")   # explicit key
+    assert geom is fc["features"][1]
+
+    # The mask follows the chosen perimeter, not the union (the union would be the final area)
+    g = Grid.from_polygon(fc, buffer_km=1, res_m=100)
+    assert g.polygon_mask(geom).sum() < g.polygon_mask(fc).sum()
+
+
+def test_untimed_features_are_all_burning():
+    from geelayers.perimeter import resolve_perimeter
+    fc = {"type": "FeatureCollection", "features": [
+        _feature(_square(-120.04, 39.72, 0.01), name="a"), _feature(_square(-120.00, 39.72, 0.01), name="b")]}
+    geom, meta = resolve_perimeter(fc, "2026-08-09T21:00Z")
+    assert geom is fc and "union of 2" in meta["initial_perimeter"]
+    single = _feature(_square(-120.04, 39.72, 0.01))
+    assert resolve_perimeter(single, "2026-08-09T21:00Z") == (single, {})
+
+
+def test_area_guard_and_bbox_lonlat(monkeypatch):
+    g = Grid.from_polygon(_square(-120.04, 39.72, 0.05), buffer_km=5, res_m=100)
+    w, s, e, n = g.bbox_lonlat()
+    assert w < -120.04 and s < 39.72 and e > -119.99 and n > 39.77      # polygon + buffer
+    assert e - w < 0.3 and n - s < 0.3                                   # and not much more
+    huge = Grid(32610, 0.0, 1e6, 10.0, 5000, 5000)
+    monkeypatch.setattr(fetch, "_compute", lambda *a: pytest.fail("must not download"))
+    with pytest.raises(ValueError, match="area too large"):
+        fetch.download(None, huge, ["b"])
 
 
 def test_cli_list(capsys):

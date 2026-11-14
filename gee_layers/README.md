@@ -29,11 +29,24 @@ From another part of the repo (e.g. the model code), install it into your own ve
 ## Use it
 
 ```python
-from geelayers import Grid, get_layers, get_weather, regrid
+from geelayers import Grid, get_fire_inputs, get_layers, get_weather, regrid
 
+# All-in-one: the fire -> layers at start + initial_burned mask + hourly weather on the same grid
+ds = get_fire_inputs(
+    polygon=drawn_geojson,   # the area burning at `start`; or point=(lat, lon) for an ignition
+    start="2026-08-08T22:30Z",
+    hours=24,                # weather from 22:00 (the hour covering start) to start + 24 h
+    radius_km=20,            # area fetched = the fire + 20 km around it, nothing more
+    res_m=100,
+)
+ds["initial_burned"].values      # int16 (y, x): 1 = burning at start, 0 = not
+ds["slope_deg"].values           # float32 (y, x), row 0 = north
+ds["wind_u_ms"].values           # float32 (time, y, x), already on the 100 m grid
+
+# Or step by step:
 # 1. The model grid: 40 x 40 km around the Bug Fire ignition, 100 m cells
 grid = Grid.from_point(lat=39.727395, lon=-120.0372941, radius_km=20, res_m=100)
-# or Grid.from_bbox(west, south, east, north, res_m=100)
+# or Grid.from_polygon(polygon, buffer_km=20, res_m=100) / Grid.from_bbox(west, south, east, north, res_m=100)
 
 # 2. Everything the model needs at the start time (only data from BEFORE that time is used)
 env = get_layers(grid, time="2026-08-08T22:30Z")
@@ -46,17 +59,39 @@ wx = regrid(wx, grid)            # dims (time, y, x)
 wind_u_at_hour_5 = wx["wind_u_ms"].isel(time=5).values
 
 # 4. Save / load
-env.to_netcdf("data/bug_env.nc", engine="h5netcdf")    # gee_layers/data/ is not committed
+ds.to_netcdf("data/bug_bundle.nc", engine="h5netcdf")  # gee_layers/data/ is not committed
 ```
 
 Command line (same thing, writes NetCDF):
 
 ```bash
 python -m geelayers list        # layers, sources, variables, units
+python -m geelayers bundle  --polygon fire.geojson --radius-km 20 \
+    --start 2026-08-08T22:30Z --hours 24 --out data/bug_bundle.nc
 python -m geelayers layers  --point 39.7274 -120.0373 --radius-km 20 --time 2026-08-08T22:30Z --out data/bug_env.nc
 python -m geelayers weather --point 39.7274 -120.0373 --radius-km 20 --res 1000 \
     --start 2026-08-08T22:00Z --end 2026-08-13T00:00Z --out data/bug_weather.nc
 ```
+
+## From a drawn polygon (the app)
+
+The app's flow: the user draws the area that is burning, then the model predicts where it spreads.
+`get_fire_inputs(polygon=...)` is the one call the backend needs.
+
+- **Input:** whatever the map widget gives you. That can be a GeoJSON `Feature`, `Polygon`, `MultiPolygon` or
+  `FeatureCollection` (as a dict, string or file), a list of `[lon, lat]`, or a shapely geometry. GeoJSON order is
+  `[lon, lat]`. Swapped coordinates raise an error instead of silently returning nothing.
+- **Several drawn shapes** are all burning, so they are merged.
+- **A perimeter time series** is a file where every feature has a time, such as
+  `real_fires/data/fires/<fire>/processed/feds_perimeters_12h.geojson`. From it, the fire at `start` is the last
+  perimeter **observed at or before `start`** (FEDS: `obs_time_utc`). Merging them would give the model the final
+  burned area, which is the answer. `ds.attrs["initial_perimeter"]` says which one was used.
+- **Data is fetched only around the fire.** The grid is the polygon's bounding box plus `radius_km`. Every Earth
+  Engine request computes only that grid's cells, so nothing is downloaded for the rest of the world. Areas above
+  16 million cells (400 x 400 km at 100 m) are refused with a clear error, so a careless drawing can't start a
+  huge download.
+- **Other sources (NISAR next):** use the same `Grid`. `grid.bbox_lonlat()` gives the (west, south, east, north)
+  box to search ASF for, and the result should be resampled onto `grid` (same `crs`, `transform`, shape).
 
 ## What you get
 

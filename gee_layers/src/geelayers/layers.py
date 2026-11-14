@@ -53,6 +53,8 @@ VARIABLES: dict[str, tuple[str, str]] = {
     "gust_ms": ("m/s", "Wind gust (rtma, gfs)"),
     "precip_mm": ("mm", "Precipitation in the hour (gfs: instantaneous rate x 1 h)"),
     "soil_moisture": ("m3/m3", "Volumetric soil water, 0-7 cm (era5_land only)"),
+    # initial fire state
+    "initial_burned": ("class", "Initial fire mask at start time: 1 = burning/burned, 0 = unburned"),
 }
 
 Builder = Callable[[ee.Geometry, "pd.Timestamp | None"], "tuple[ee.Image, dict[str, str]]"]
