@@ -43,6 +43,7 @@ def post(monkeypatch):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
     send.calls = calls
+    send.port = httpd.server_address[1]
     yield send
     httpd.shutdown()
     httpd.server_close()
@@ -53,6 +54,12 @@ def test_predict_endpoint(post):
     status, out = post("/api/predict", body)
     assert status == 200 and out["summary"]["n_cells"] == 0 and out["bounds"] == [0, 0, 1, 1]
     assert post.calls == [body]
+
+
+def test_browser_visit_points_to_the_website(post):
+    port = post.port
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
+        assert r.status == 200 and "localhost:5173" in r.read().decode()
 
 
 def test_predict_endpoint_errors(post):

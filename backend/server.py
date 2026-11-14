@@ -116,6 +116,18 @@ def run_predict(body: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        """A browser opening this port by mistake: point it to the website."""
+        page = ("<!doctype html><meta charset='utf-8'><title>psagravity API</title>"
+                "<p style='font:16px system-ui'>This is the Python API server of the fire-spread app, used by the "
+                "website in the background.<br>Open the app at "
+                "<a href='http://localhost:5173'>http://localhost:5173</a>.</p>").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
+
     def do_POST(self) -> None:
         if self.path == "/api/predict":
             try:
