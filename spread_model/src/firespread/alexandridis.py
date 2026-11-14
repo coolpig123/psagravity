@@ -1,19 +1,23 @@
-"""Alexandridis et al. (2008) cellular-automaton spread probability, with a NISAR dryness term.
+"""Alexandridis et al. (2008) cellular-automaton spread probability, with a fuel-moisture term.
 
-For a burning cell i and each of its 8 neighbours j:
+For a burning cell i and each of its 8 neighbours j at time t:
 
-    P(i -> j) = P0 * (1 + P_veg[j]) * (1 + P_den[j]) * (1 + P_dry[j]) * P_wind(i -> j) * P_slope(i -> j)
-                * P_mask[j] * D(i -> j)
+    P_burn(i -> j, t) = clip(P0 * (1 + P_veg[j]) * (1 + P_den[j]) * P_w(i -> j, t) * P_s(i -> j)
+                             * P_m(j, t) * P_mask[j] * D(i -> j), 0, 1)
 
-clipped to [0, 1]. D = 1 for N/E/S/W neighbours and 1/sqrt(2) for diagonal ones (they are sqrt(2) cells
-away; see AlexandridisParams.diagonal_factor). An unburned cell j catches fire in the next step with
-probability 1 - prod_i (1 - P(i -> j)) over its burning neighbours i.
+    P_m(j, t) = P_emc(j, t) * (1 + P_dry[j])
+    P_emc     = exp(-b_emc * (EMC(T, RH) - emc_ref))      fast: hourly air -> fine-fuel moisture (Simard 1968)
+    P_dry     = NISAR soil-moisture class (+0.3 / 0 / -0.3) slow: ground moisture
+
+D = 1 for N/E/S/W neighbours and diagonal_factor (1/sqrt(2)) for diagonal ones. An unburned cell j
+catches fire in the next step with probability 1 - prod_i (1 - P_burn(i -> j)) over its burning
+neighbours i.
 
 Data sources:
 - P_veg, P_mask: Earth Engine (geelayers: LANDFIRE EVC fuel_lifeform, WorldCover landcover)
-- P_wind, P_slope: Earth Engine (geelayers: hourly wind, NASADEM elevation)
-- P_den, P_dry: NISAR only (variables in NISAR_VARIABLES, from the NISAR module). Until they are
-  provided both are 0, i.e. neutral (factor 1).
+- P_w, P_s, P_emc: Earth Engine (geelayers: hourly wind, NASADEM elevation, hourly temp_c + rh_pct)
+- P_den, P_dry (and burn scars in P_mask): NISAR only (see nisar.py). Until provided they are
+  neutral (factor 1).
 
 Everything is numpy array maths on whole grids (no loops over cells), so it can be ported to
 torch / jax as-is to learn the parameters by gradient descent.
@@ -31,14 +35,6 @@ import xarray as xr
 DIRECTIONS = (("N", -1, 0, 0.0), ("NE", -1, 1, 45.0), ("E", 0, 1, 90.0), ("SE", 1, 1, 135.0),
               ("S", 1, 0, 180.0), ("SW", 1, -1, 225.0), ("W", 0, -1, 270.0), ("NW", -1, -1, 315.0))
 DIR_NAMES = [d[0] for d in DIRECTIONS]
-
-# What the NISAR module provides (xarray Dataset, dims (y, x), on the inputs grid or regriddable to it:
-# attrs["crs"] + x / y coords in metres). Every variable is optional.
-NISAR_VARIABLES = {
-    "nisar_cover_pct": ("%", "vegetation / canopy cover from L-band HV backscatter or biomass -> P_den (only source)"),
-    "nisar_soil_moisture": ("m3/m3", "surface soil moisture (NISAR SME2) -> P_dry (only source)"),
-    "nisar_burned": ("0/1", "1 = already burned (L-band change detection burn scar) -> P_mask = 0"),
-}
 
 # ESA WorldCover classes (geelayers `landcover`)
 WC_NOT_BURNABLE = (50, 60, 70, 80)   # built-up, bare, snow/ice, water
@@ -67,6 +63,9 @@ class AlexandridisParams:
     den_dense: float = 0.3
     sparse_below_pct: float = 30.0
     dense_from_pct: float = 60.0
+    # P_emc from hourly air temperature + humidity via Simard (1968) EMC (not in the 2008 paper; to be calibrated)
+    b_emc: float = 0.05           # 1/% EMC: P_emc = exp(-b_emc * (EMC - emc_ref_pct))
+    emc_ref_pct: float = 8.0      # EMC at which P_emc = 1 (reference fine-fuel moisture, %)
     # P_dry from nisar_soil_moisture (not in the 2008 paper; placeholder values, to be calibrated)
     dry_dry: float = 0.3          # soil moisture below dry_below_m3m3: drier fuel spreads more
     dry_normal: float = 0.0
@@ -131,6 +130,51 @@ def p_dry(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
     out, n_nan = _classes(ds["nisar_soil_moisture"].values.astype(np.float32), params.dry_below_m3m3,
                           params.wet_from_m3m3, params.dry_dry, params.dry_normal, params.dry_wet)
     return out, "nisar_soil_moisture" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
+
+
+def simard_emc(temp_c, rh_pct) -> np.ndarray:
+    """Equilibrium moisture content of fine dead fuel, % (Simard 1968, as used in the US NFDRS).
+
+    T_f = temp_c * 1.8 + 32, H = clip(rh_pct, 0, 100):
+      H < 10:        0.03229 + 0.281073 H - 0.000578 H T_f
+      10 <= H < 50:  2.22749 + 0.160107 H - 0.014784 T_f
+      H >= 50:       21.0606 + 0.005565 H^2 - 0.00035 H T_f - 0.483199 H
+    NaN in -> NaN out. Clipped at 0 (very hot, very dry air).
+    """
+    t_f = np.asarray(temp_c, dtype=np.float64) * 1.8 + 32.0
+    h = np.clip(np.asarray(rh_pct, dtype=np.float64), 0.0, 100.0)
+    emc = np.where(h < 10, 0.03229 + 0.281073 * h - 0.000578 * h * t_f,
+          np.where(h < 50, 2.22749 + 0.160107 * h - 0.014784 * t_f,
+                   21.0606 + 0.005565 * h ** 2 - 0.00035 * h * t_f - 0.483199 * h))
+    return np.maximum(emc, 0.0)          # NaN stays NaN
+
+
+def p_emc(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, np.ndarray, str]:
+    """P_emc = exp(-b_emc (EMC - emc_ref)): > 1 for hot / dry air, < 1 for cool / humid air.
+
+    Uses temp_c and rh_pct of the cell that would catch fire, at the weather step in `ds`.
+    Returns (P_emc, EMC %, source). Missing variables or NaN cells -> P_emc = 1 (neutral), EMC = NaN.
+    """
+    shape = (ds.sizes["y"], ds.sizes["x"])
+    if "temp_c" not in ds or "rh_pct" not in ds:
+        return (np.ones(shape, np.float32), np.full(shape, np.nan, np.float32),
+                "EMC: temp_c / rh_pct not in inputs -> 1 (neutral)")
+    emc = simard_emc(ds["temp_c"].values, ds["rh_pct"].values)
+    factor = np.exp(-params.b_emc * (emc - params.emc_ref_pct))
+    n_nan = int(np.isnan(factor).sum())
+    factor[np.isnan(factor)] = 1.0
+    return (factor.astype(np.float32), emc.astype(np.float32),
+            "EMC: Simard 1968 from temp_c, rh_pct" + (f"; {n_nan} cells without weather -> 1" if n_nan else ""))
+
+
+def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, dict[str, np.ndarray], str]:
+    """P_m = P_emc * (1 + P_dry): fast air moisture (GEE hourly) x slow ground moisture (NISAR).
+
+    Returns (P_m, components {"emc_pct", "p_emc", "p_dry"}, source).
+    """
+    emc_factor, emc, emc_src = p_emc(ds, params)
+    dry, dry_src = p_dry(ds, params)
+    return emc_factor * (1 + dry), {"emc_pct": emc, "p_emc": emc_factor, "p_dry": dry}, f"{emc_src}; P_dry: {dry_src}"
 
 
 def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
@@ -216,7 +260,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     time:    which weather step to use (last one at or before `time`); default the first.
 
     Returns a Dataset with
-      p_veg, p_den, p_dry, p_mask (y, x)          factors of the cell that would catch fire
+      p_veg, p_den, p_m, p_mask (y, x)            factors of the cell that would catch fire
+      emc_pct, p_emc, p_dry (y, x)                the two parts of p_m (p_m = p_emc * (1 + p_dry))
       p_wind, p_slope, p_spread (direction, y, x) for the burning cell at (y, x) spreading toward `direction`
       ignition_prob (y, x)                        chance each unburned cell catches fire in the next step
     and attrs summarising the most likely spread direction.
@@ -235,7 +280,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     veg, veg_src = p_veg(snap, params)
     den, den_src = p_den(snap, params)
-    dry, dry_src = p_dry(snap, params)
+    moist, moist_parts, moist_src = p_moisture(snap, params)
     mask, mask_src = p_mask(snap, burning)
     if "wind_u_ms" in snap and "wind_v_ms" in snap:
         u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
@@ -251,8 +296,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         elev = np.zeros(shape, np.float32)
         slope_src = "no elevation in inputs -> P_slope = 1"
 
-    # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den)(1 + P_dry) P_mask
-    target_factor = params.p0 * (1 + veg) * (1 + den) * (1 + dry) * mask
+    # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_m P_mask
+    target_factor = params.p0 * (1 + veg) * (1 + den) * moist * mask
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)
@@ -291,7 +336,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     dims2, dims3 = ("y", "x"), ("direction", "y", "x")
     coords = {k: ds.coords[k] for k in ("y", "x", "lat", "lon") if k in ds.coords}
     out = xr.Dataset(
-        {"p_veg": (dims2, veg), "p_den": (dims2, den), "p_dry": (dims2, dry), "p_mask": (dims2, mask),
+        {"p_veg": (dims2, veg), "p_den": (dims2, den), "p_m": (dims2, moist),
+         **{k: (dims2, v) for k, v in moist_parts.items()}, "p_mask": (dims2, mask),
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
          "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
         coords={**coords, "direction": DIR_NAMES})
@@ -301,12 +347,12 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out.attrs.update({
         **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "nisar_alignment")
            if k in ds.attrs},
-        "model": "Alexandridis et al. 2008 + NISAR dryness: "
-                 "P = P0 (1+P_veg)(1+P_den)(1+P_dry) P_wind P_slope P_mask D (D = 1/sqrt(2) diagonal)",
+        "model": "Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
+                 "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR); D = 1/sqrt(2) diagonal",
         "params": repr(params),
         "weather_time_utc": weather_time,
         "weather_note": time_note,
-        "source_p_veg": veg_src, "source_p_den": den_src, "source_p_dry": dry_src, "source_p_mask": mask_src,
+        "source_p_veg": veg_src, "source_p_den": den_src, "source_p_m": moist_src, "source_p_mask": mask_src,
         "source_p_wind": wind_src, "source_p_slope": slope_src,
         "main_direction_deg": main_bearing, "main_direction": _compass(main_bearing),
         "direction_strength": strength,   # 0 = spreads evenly all round, 1 = all in one direction
@@ -334,7 +380,8 @@ def summary(result: xr.Dataset) -> str:
         lines.append(f"Weather used: {a['weather_time_utc']} UTC")
     if a.get("weather_note"):
         lines.append(f"WARNING: {a['weather_note']}")
-    lines.append(f"NISAR: density {a['source_p_den']}; dryness {a['source_p_dry']}")
+    lines.append(f"Moisture P_m: {a['source_p_m']}")
+    lines.append(f"Density P_den: {a['source_p_den']}")
     if a["fire_touches_grid_edge"]:
         lines.append("WARNING: the fire touches the grid edge; spread beyond it is not computed (use a larger radius).")
     if a["n_clipped"]:
