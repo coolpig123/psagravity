@@ -198,6 +198,31 @@ def test_p_mask():
     assert mask.tolist()[0] == [0, 1, 0, 0, 0]               # burning, ok, no fuel, water, NISAR burn scar
 
 
+def test_p_mask_sentinel2_scar():
+    ds = xr.Dataset({"s2_burned": (("y", "x"), np.array([[0, 1, -1]], np.int16))})
+    mask, src = p_mask(ds, np.zeros((1, 3), bool))
+    assert mask.tolist()[0] == [1, 0, 1]                     # scar can't burn; no clear observation = unknown
+    assert "s2_burned" in src
+
+
+def test_scars_from_dnbr_and_block_mean():
+    from firespread.burn_scars import _block_mean, _grid_of, scars_from_dnbr
+    assert scars_from_dnbr(np.array([0.05, 0.2, np.nan])).tolist() == [0, 1, -1]
+    a = np.array([[0.1, 0.3, np.nan, np.nan], [0.1, 0.3, np.nan, 0.4]], np.float32)
+    assert np.allclose(_block_mean(a, 2), [[0.2, 0.4]])      # NaN ignored; mean of the clear 20 m pixels
+    g = _grid_of(make_ds())
+    assert (g.epsg, g.x0, g.y0, g.res, g.width, g.height) == (32610, 0.0, 1000.0, 100.0, N, N)
+
+
+def test_predict_with_given_inputs_skips_burn_scars_and_keeps_s2():
+    ds = make_ds()
+    assert "s2_burned" not in predict(inputs=ds).attrs.get("source_p_mask", "")   # no Earth Engine call
+    ds["s2_burned"] = (("y", "x"), np.ones((N, N), np.int16))
+    ds.attrs["s2_current_scenes"] = "3"
+    res = predict(inputs=ds)
+    assert float(res["ignition_prob"].max()) == 0.0 and res.attrs["s2_current_scenes"] == "3"
+
+
 # ---- whole grid ------------------------------------------------------------------------------
 
 def neighbours(res, name):
