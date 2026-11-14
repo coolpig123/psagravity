@@ -55,6 +55,10 @@ VARIABLES: dict[str, tuple[str, str]] = {
     "soil_moisture": ("m3/m3", "Volumetric soil water, 0-7 cm (era5_land only)"),
     # initial fire state
     "initial_burned": ("class", "Initial fire mask at start time: 1 = burning/burned, 0 = unburned"),
+    # NISAR radar layers (spread model inputs)
+    "nisar_cover_pct": ("%", "Vegetation canopy cover percentage from NISAR L-band HV volume scattering (0-100%)"),
+    "nisar_soil_moisture": ("m3/m3", "Volumetric soil moisture content from NISAR L-band HH backscatter (0-0.45 m3/m3)"),
+    "nisar_burned": ("1", "NISAR burned mask: 1 = already burned or non-combustible (water/rock), 0 = combustible fuel"),
 }
 
 Builder = Callable[[ee.Geometry, "pd.Timestamp | None"], "tuple[ee.Image, dict[str, str]]"]
