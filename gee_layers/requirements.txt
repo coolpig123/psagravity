@@ -1,0 +1,10 @@
+earthengine-api==1.7.52
+numpy==2.5.4
+pandas==3.1.1
+xarray==2026.9.0
+h5netcdf==1.8.3
+scipy==1.18.1
+pyproj==3.8.0
+python-dotenv==1.2.4
+# tests
+pytest==9.2.0
