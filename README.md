@@ -24,7 +24,11 @@
 - 4 שריפות בארה״ב: Bug (ראשית), Colwash, Biscar, Crosswhite.
 - טבלת סיכום עם אחוזי התאמה מול ה-perimeter הרשמי: [`real_fires/docs/fires_summary.md`](real_fires/docs/fires_summary.md).
 - אתר אחד לכל השריפות עם ציר זמן: [`real_fires/app/index.html`](real_fires/app/index.html).
-- לא נעשה עדיין: השוואת burn scar של NISAR (issue #7), שריפות באירופה, מודל ההתפשטות.
+- **האפליקציה עובדת מקצה לקצה:** מציירים פוליגון של האש על המפה, בוחרים שעת התחלה (UTC) ולוחצים **Predict**. אחרי כדקה מופיעה מפת חום של הסיכוי שכל תא יישרף, עם כיוון ההתפשטות הסביר ונתוני הקלט ששימשו. עובד בכל העולם, לא רק בארה״ב. הוראות: [`frontend/README.md`](frontend/README.md).
+- מודל Alexandridis מלא (`spread_model/`) עם 200 הרצות Monte Carlo, ושכבות קלט מ-Google Earth Engine (`gee_layers/`): גובה, כיסוי קרקע, מזג אוויר, וצלקות שריפה מ-Sentinel-2.
+- NISAR מחובר למודל: כיסוי צמחייה, לחות קרקע ואזורים שנשרפו, קריאה רק של אזור האש (מהיר פי ~5 עם cache).
+- פירוט מלא של מה נעשה: [Status](#status-2026-11-14) למטה.
+- לא נעשה עדיין: זמן אמיתי (שעות) לכל צעד, כיול הפרמטרים על שריפות אמיתיות ו-hindcast, השוואת burn scar של NISAR (issue #7), שריפות באירופה.
 
 ### המספרים העיקריים
 | שריפה | שטח רשמי | FEDS IoU | VIIRS covers | GOES: איחור בזיהוי ראשון | NISAR pairs |
@@ -64,6 +68,8 @@ cp .env.example .env                                        # FIRMS_MAP_KEY (+ E
 | `real_fires/app/` | האתר |
 | `gee_layers/` | שכבות קלט למודל מ-Google Earth Engine: גובה, שיפוע, כיסוי קרקע, דלק, יובש, מזג אוויר (ראו `gee_layers/README.md`) |
 | `spread_model/` | מודל Alexandridis: הסתברות התפשטות לכל תא ליד האש, והכיוון הסביר ביותר (נוסחאות ב-`spread_model/README.md`) |
+| `frontend/` | האתר (React + MapLibre): ציור פוליגון, Predict, מפת חום. הרצה: `cd frontend` ואז `npm run dev` |
+| `backend/` | שרת Python ‏(`POST /api/predict`) שמריץ את כל ה-pipeline על הפוליגון |
 
 </div>
 
@@ -149,14 +155,100 @@ Hindcast on real fires observed by NISAR since June 2026: feed the model only wh
 | Le Porge, France | 2026-07-22 | 42,000 ha | 07-14, 07-17 / 07-24, 07-26, 08-10 |
 | Rowe Creek / Crosswhite, OR | 2026-07-15 | ~343,000 acres | 07-13, 07-15 / 07-18 → 07-27 |
 
+## Status (2026-11-14)
+
+**Working end to end, anywhere in the world:** draw the burning area on the map, set the start time (UTC), press
+**Predict**. About a minute later the map shows the chance that each 100 m cell burns within the next 30 model
+steps, with the most likely direction, the expected burned area and the inputs that were used. Setup and run:
+[`frontend/README.md`](frontend/README.md).
+
+### What is built
+
+**Ground truth from real fires** (`real_fires/`): VIIRS, GOES, FEDS and WFIGS for the Bug, Colwash, Biscar and
+Crosswhite fires, with arrival times, perimeters, metrics and a multi-fire site.
+
+**Model inputs from Google Earth Engine** (`gee_layers/`), fetched only for the polygon + 5 km:
+- Terrain: NASADEM elevation, slope and aspect, with GMTED filling the gaps beyond NASADEM's coverage (north of
+  60°N, for example).
+- Land cover: ESA WorldCover worldwide, plus LANDFIRE fuel (cover and height) in the US.
+- Weather at the start time: RTMA in the US; ERA5-Land elsewhere; GFS forecasts for the last few days, when
+  reanalysis is not available yet.
+- One call, `get_fire_inputs(polygon, start)`, returns everything on one grid.
+- Works outside the US too.
+
+**Burn scars from Sentinel-2:**
+- The model compares the burn index (dNBR) with the same season a year earlier, at 20 m.
+- Already-burned land then blocks the fire.
+- On the Bug Fire it finds 97% precision and 78% recall against the official perimeter.
+
+**NISAR** (`real_fires/src/firedata/nisar_*`):
+- GCOV HH/HV gives vegetation cover and burned areas; SME2 gives soil moisture and vegetation water content.
+- Only the chunks over the fire area are read, in parallel, and cached per granule (~5x faster). Gaps in the swath
+  are filled from older passes.
+- If a granule lacks a layer, or the login fails, the model runs without NISAR and says so.
+
+**Spread model** (`spread_model/`):
+- Alexandridis et al. (2008) cellular automaton:
+  `P = P0·(1+P_veg)·(1+P_den)·P_wind·P_slope·P_moisture·P_mask`.
+  - `P_moisture` combines the equilibrium moisture of the air with NISAR soil moisture.
+  - `P_mask` stops the fire at no fuel, water, built-up land, NISAR or Sentinel-2 burn scars, and the open sea.
+- A Monte Carlo simulation (200 runs) gives the burn probability and the arrival step for each cell.
+- If nothing can spread, the app explains why (for example, "all neighbours are water").
+
+**Web app** (`frontend/` + `backend/`):
+- Website (React + MapLibre): draw the polygon, set the UTC start time, press Predict; the heatmap and a summary
+  panel appear.
+- Python API: `POST /api/predict`.
+- `npm run dev` starts both.
+- Earth Engine uses the team project by default and opens the Google login on first use.
+
+**Checks:**
+- 89 offline tests (`gee_layers`, `spread_model`, `real_fires`, `backend`).
+- A live robustness sweep on 13 places, all of which return a valid map:
+  - Bug Fire, a recent date with forecast weather, and a tiny polygon smaller than one cell;
+  - Nigeria in the wet and dry seasons, and Lagos city;
+  - Sahara, Amazon, Alaska, Blue Mountains (Australia) and Greece;
+  - open ocean, and the Haifa coast (half sea).
+
+### Ziv's work
+
+- **Model inputs:** `gee_layers`, the Earth Engine inputs (terrain, land cover and fuel, weather, one call per
+  polygon), with global support.
+- **Spread model:** `spread_model`, the Alexandridis model.
+  - Moisture factor from air humidity plus NISAR soil moisture.
+  - Masks for no fuel, water, built-up land, burn scars and the open sea.
+  - Monte Carlo simulation, and the reasons shown when the map is empty.
+- **Sentinel-2 burn scars** (dNBR), included in the model.
+- **NISAR in the model:**
+  - connected through `nisar_provider`;
+  - reads only the fire area, gets SME2 soil moisture and vegetation water content, and fills swath gaps from
+    older passes;
+  - the ~5x faster parallel, cached reader.
+- **Website to model:** `POST /api/predict`, the Predict button, the start-time input, the heatmap and the summary
+  panel.
+- **Robustness:** the 13-place sweep, which led to these fixes:
+  - elevation gaps;
+  - missing NISAR layers;
+  - fire spreading over the sea;
+  - a stale server that kept answering on port 8000.
+- **Tests and setup:** offline tests for every part, and Earth Engine that needs no setup.
+
+### Next
+
+1. **Time:** give every step a duration from wind, slope and fuel (Rothermel rate of spread), with random
+   variation and hourly weather, so the map shows hours instead of steps.
+2. **Calibrate and validate:** fit the parameters to the VIIRS / GOES arrival times of the 4 US fires, then
+   hindcast with and without NISAR.
+3. NISAR burn-scar comparison (issue #7), and the European fires.
+
 ## Roadmap
 
-- [ ] Select fires and build ground truth (location, intensity, size vs. time)
-- [ ] Spread model: spec + input grid
-- [ ] Spread model: simulator + learning the parameters
+- [x] Select fires and build ground truth (location, intensity, size vs. time)
+- [x] Spread model: spec + input grid
+- [ ] Spread model: simulator + learning the parameters (simulator done; learning to do)
 - [ ] Spread model: live update + evaluation
 - [ ] Ignition-risk map
-- [ ] Web app: terrain layers over time, spread animation, risk map
+- [ ] Web app: terrain layers over time, spread animation, risk map (draw + predict + heatmap done)
 - [ ] Final report and video
 
 Progress is tracked in the GitHub project **psagravity tasks**.
@@ -169,7 +261,9 @@ psagravity/
 ├── docs/                  # project figures (architecture.png)
 ├── gee_layers/            # model inputs from Google Earth Engine: terrain, fuels, dryness, weather (see its README)
 ├── spread_model/          # Alexandridis CA: spread probability per cell + most likely direction (see its README)
-└── real_fires/            # ground truth from real fires
+├── frontend/              # website: draw the fire, Predict, heatmap (see its README to run the app)
+├── backend/               # Python API server (POST /api/predict) used by the website
+└── real_fires/            # ground truth from real fires, NISAR reader
     ├── src/firedata/      # pipeline code (package)
     ├── scripts/           # build_ground_truth.py, test_app.py
     ├── data/fires/<fire>/ # processed data, figures, README per fire (raw data not committed)
@@ -187,6 +281,10 @@ pip install -r requirements.txt -e .
 ```
 
 Accounts needed: [NASA Earthdata](https://urs.earthdata.nasa.gov/) (free), FIRMS MAP_KEY (free).
+
+**To run the prediction app** (website + model): follow [`frontend/README.md`](frontend/README.md). You need a
+Google account with access to the team's Earth Engine project (ask the project owner to add you); the Earthdata
+login is optional (without it the model runs without NISAR).
 
 ## Team
 
