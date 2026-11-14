@@ -11,4 +11,21 @@ export default defineConfig({
   cacheDir: join(tmpdir(), 'psagravity-vite'),
   // MapLibre loads its worker file next to itself; pre-bundling breaks that path.
   optimizeDeps: { exclude: ['maplibre-gl'] },
+  // Forward API calls to the Python server (backend/server.py), so the browser sees one origin.
+  // 127.0.0.1, not localhost: the Python server listens on IPv4 only.
+  // If it is not running, answer 503 with a clear message instead of a bare 500.
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        configure: (proxy) => {
+          proxy.on('error', (_err, _req, res) => {
+            if (!('writeHead' in res) || res.headersSent) return
+            res.writeHead(503, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'backend not running' }))
+          })
+        },
+      },
+    },
+  },
 })
