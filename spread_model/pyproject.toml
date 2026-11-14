@@ -7,17 +7,23 @@ name = "firespread"
 version = "0.1.0"
 description = "Fire-spread probability with the Alexandridis et al. (2008) cellular automaton"
 requires-python = ">=3.11"
-dependencies = ["numpy>=2.0", "pandas>=2.2", "xarray>=2024.1", "h5netcdf>=1.3", "h5py>=3.10"]
+dependencies = ["numpy>=2.0", "pandas>=2.2", "xarray>=2024.1", "h5netcdf>=1.3", "h5py>=3.10", "scipy>=1.11",
+                "xgboost>=2.0"]
 
 [project.optional-dependencies]
 # fetching inputs from Earth Engine: pip install -e ../gee_layers
 dev = ["pytest>=8"]
+# training the arrival-time model from real_fires (fire_points.parquet)
+train = ["pyarrow>=14"]
 
 [project.scripts]
 firespread = "firespread.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+firespread = ["models/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
