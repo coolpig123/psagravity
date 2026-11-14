@@ -8,12 +8,12 @@ backend/server.py serves it as POST /api/predict:
     -> {"cells":   GeoJSON FeatureCollection, one square per cell with burn_prob > MIN_PROB: the chance the
                    cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer.
                    With "arrival" (and a trained model, survival.py) also the cells with p_arrive_48h > MIN_PROB,
-                   and per cell t50 = median hours until the fire arrives, p6 / p12 / p24 / p48 = chance within
-                   6 / 12 / 24 / 48 h (null for cells already burning),
+                   and per cell pe = chance the fire ever gets there, t50 = median hours until it arrives if it
+                   does, p6 / p12 / p24 / p48 = chance within 6 / 12 / 24 / 48 h (null for cells already burning),
         "bounds":  [west, south, east, north] of the model grid,
         "summary": {main_direction, main_direction_deg, direction_strength, expected_new_area_km2,
                     weather_time_utc, weather_source, nisar_passes_used, nisar_coverage_pct, s2_clear_pct,
-                    s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, max_prob, text, notes,
+                    s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, n_map_cells, max_prob, text, notes,
                     arrival, arrival_horizons_h, arrival_model, arrival_area_<h>h_km2}}
                    (main_direction / expected_new_area_km2 are for the next single step)
 
@@ -42,7 +42,7 @@ SUMMARY_KEYS = ("main_direction", "main_direction_deg", "direction_strength", "e
                 "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge",
                 "arrival_model", *(f"arrival_area_{h}h_km2" for h in HORIZONS_H))
 # cell properties for the arrival-time view: median hours + chance within each horizon (survival.py)
-ARRIVAL_PROPS = {"t50": "arrival_h", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
+ARRIVAL_PROPS = {"pe": "p_ever", "t50": "arrival_h", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
 
 
 def parse_request(body: dict) -> dict:
@@ -200,7 +200,9 @@ def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nis
         notes.append("No spread on the map: " + no_spread_reason(result))
     prob = result["burn_prob"].values
     info = {k: _plain(result.attrs[k]) for k in SUMMARY_KEYS if k in result.attrs}
-    info.update({"n_cells": len(cells["features"]), "max_prob": _plain(np.nanmax(prob)) if prob.size else None,
+    # n_cells: cells at risk within the CA steps (matches sim_expected_area_km2); n_map_cells: squares on the map
+    info.update({"n_cells": int((np.nan_to_num(prob) > MIN_PROB).sum()), "n_map_cells": len(cells["features"]),
+                 "max_prob": _plain(np.nanmax(prob)) if prob.size else None,
                  "text": summary(result), "notes": notes, "arrival": arrival,
                  "arrival_horizons_h": list(HORIZONS_H) if arrival else []})
     return {"cells": cells, "bounds": _bounds(result), "summary": info}

@@ -46,7 +46,8 @@ type Prediction = {
     sim_steps?: number
     sim_expected_area_km2?: number
     sim_reached_grid_edge?: number
-    n_cells: number
+    n_cells: number // cells at risk within the CA steps
+    n_map_cells?: number // squares on the map (also the arrival-time cells)
     max_prob: number | null
     notes: string[]
     // arrival times (survival model, spread_model/src/firespread/survival.py); false if it was skipped
@@ -61,10 +62,11 @@ type Prediction = {
 }
 
 // What the prediction cells are coloured by: CA chance (p), median arrival hours (t50), or chance within N h.
-type View = 'p' | 't50' | 'p6' | 'p12' | 'p24' | 'p48'
+type View = 'p' | 'pe' | 't50' | 'p6' | 'p12' | 'p24' | 'p48'
 const VIEW_LABELS: Record<View, string> = {
   p: 'Chance of burning (CA steps)',
-  t50: 'Arrival time (median hours)',
+  pe: 'Chance the fire ever gets there',
+  t50: 'Arrival time if it gets there (median hours)',
   p6: 'Chance within 6 h',
   p12: 'Chance within 12 h',
   p24: 'Chance within 24 h',
@@ -81,9 +83,10 @@ function viewPaint(view: View) {
   const opacity = (view === 't50'
     ? ['interpolate', ['linear'], value, 0, 0.9, 48, 0.7, 96, 0.45]
     : ['interpolate', ['linear'], value, 0, 0.45, 0.3, 0.75, 1, 0.9]) as unknown as maplibregl.ExpressionSpecification
-  // arrival view: only cells the fire may plausibly reach within 2 days; chance views: hide ~0 chances
+  // arrival view: the time if the fire gets there, so only cells it has a real chance (>= 10%) to reach;
+  // chance views: hide ~0 chances
   const filter = (view === 't50'
-    ? ['>=', ['coalesce', ['get', 'p48'], 0], 0.05]
+    ? ['>=', ['coalesce', ['get', 'pe'], 0], 0.1]
     : ['>', ['coalesce', ['get', view], 0], 0.01]) as unknown as maplibregl.FilterSpecification
   return { ramp, opacity, filter }
 }
@@ -275,11 +278,12 @@ function App() {
       if (modeRef.current === 'drawing') return
       const q = e.features?.[0]?.properties
       if (!q) return
-      const arrival = q.t50 !== undefined
+      const arrival = q.pe !== undefined
       const html =
         `<b>Chance of burning (CA steps):</b> ${fmtPct(q.p)}` +
         (arrival
-          ? `<br><b>Median arrival:</b> ${fmtHours(q.t50)}` +
+          ? `<br><b>Chance the fire ever gets here:</b> ${fmtPct(q.pe)}` +
+            `<br><b>Median arrival, if it does:</b> ${fmtHours(q.t50)}` +
             `<br><b>Chance within</b> 6 h ${fmtPct(q.p6)} · 12 h ${fmtPct(q.p12)} · 24 h ${fmtPct(q.p24)} · 48 h ${fmtPct(q.p48)}`
           : '')
       new maplibregl.Popup({ closeButton: true, maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map)
@@ -572,7 +576,7 @@ ${err instanceof Error ? err.message : err}`)
                 <>Chance of burning within {s.sim_steps} steps (one step = up to one 100 m cell) <span className="ramp" /> 0 → 1</>
               )}
               {view === 't50' && (
-                <>Median hours until the fire arrives (cells with ≥ 5% chance within 48 h) 0 h <span className="ramp hours" /> 4 days</>
+                <>Median hours until the fire arrives, if it does (cells it reaches with ≥ 10% chance) 0 h <span className="ramp hours" /> 4 days</>
               )}
               {view !== 'p' && view !== 't50' && (
                 <>{VIEW_LABELS[view]} <span className="ramp" /> 0 → 1</>

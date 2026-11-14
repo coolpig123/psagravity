@@ -117,7 +117,7 @@ def run_predict(body: dict) -> dict:
         pass
     t0 = time.time()
     out = predict_payload(body)
-    print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_cells']} cells on the map")
+    print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_map_cells']} cells on the map")
     print(out["summary"]["text"])
     for note in out["summary"]["notes"]:
         print(f"NOTE: {note}")
