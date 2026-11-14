@@ -9,10 +9,10 @@
 
 See gee_layers/README.md for the variable list and units.
 """
-from .api import DEFAULT_LAYERS, describe, get_layers, get_weather, regrid
+from .api import DEFAULT_LAYERS, describe, get_fire_inputs, get_layers, get_weather, regrid
 from .auth import init
 from .grid import Grid, utm_epsg
 from .layers import LAYERS, VARIABLES, WEATHER
 
-__all__ = ["Grid", "utm_epsg", "init", "get_layers", "get_weather", "regrid", "describe",
+__all__ = ["Grid", "utm_epsg", "init", "get_fire_inputs", "get_layers", "get_weather", "regrid", "describe",
            "DEFAULT_LAYERS", "LAYERS", "WEATHER", "VARIABLES"]
