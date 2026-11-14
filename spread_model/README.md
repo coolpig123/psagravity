@@ -36,6 +36,35 @@ python -m firespread --inputs ../gee_layers/data/bug_bundle.nc --nisar nisar.nc 
 
 `predict()` fetches only the Earth Engine layers the model uses (`MODEL_LAYERS`): terrain, landcover,
 vegetation_cover and weather (wind, temp_c, rh_pct). It skips Sentinel-2 `vegetation` and gridMET `fuel_dryness`.
+It also adds Sentinel-2 burn scars (below); turn them off with `burn_scars=False` / `--no-burn-scars`.
+
+### Burn scars from Sentinel-2 (dNBR)
+
+[burn_scars.py](src/firespread/burn_scars.py) marks cells that already burned, so P_mask = 0 there:
+
+```
+NBR  = (B8A - B12) / (B8A + B12)                      near-infrared vs shortwave-infrared, 20 m
+dNBR = NBR_reference - NBR_current                     burned if dNBR > 0.15
+  reference = median of clear pixels, same season a year earlier (t - 365 d ± 30 d)
+  current   = newest cloud- and shadow-free pixel in the 30 days before t
+```
+
+Using last year's same season keeps the vegetation's seasonal cycle out of the difference. It also means
+we don't need to know when a fire happened. The result is `s2_burned` (1 scar, 0 not, -1 no clear pixel)
+and `s2_dnbr`, computed at 20 m and averaged to the model cells.
+
+Bug Fire check against the official perimeter (100 m cells):
+
+| As of | Recall | Precision | False alarms outside |
+|---|---|---|---|
+| 08-16 00Z, before any clear post-fire image (smoke) | 34% | 92% | 1.2% |
+| 08-17, first clear image after the fire | 78% | 97% | 1.1% |
+| 08-31 | 70% | 96% | 1.1% |
+| *NISAR HV change, 08-16 (for comparison)* | *41%* | *90%* | *2.0%* |
+
+Optical can't see through smoke, so while a fire is burning the radar `nisar_burned` (which still applies) is
+the only scar source. Recall is measured against the outer perimeter, which also contains unburned islands.
+It is called only when `predict()` fetches the inputs, or with `burn_scars=True`.
 
 ## The model
 
@@ -56,7 +85,7 @@ burning neighbours, which gives `ignition_prob`.
 | **P_w** | `exp(c1·V) · exp(c2·V·(cos θ − 1))` | V = wind speed (m/s) at *i*; θ = angle between the direction the wind blows **toward** and *i → j*; c1 = 0.045, c2 = 0.131 s/m | GEE: hourly wind |
 | **P_s** | `exp(a·θs)`, `θs = atan((E_j − E_i) / l)` | E = elevation (m); l = cell size, × √2 for diagonals; θs in degrees (> 0 uphill); a = 0.078 /deg | GEE: NASADEM |
 | **P_m** | `P_emc · (1 + P_dry) · (1 + P_vwc)` | fuel moisture, see below | GEE hourly + NISAR |
-| **P_mask** | 1 or 0 | 0 if *j* cannot burn: burning now, no fuel, WorldCover built-up / bare / snow / water, NISAR burn scar, or outside the grid | GEE + NISAR `nisar_burned` |
+| **P_mask** | 1 or 0 | 0 if *j* cannot burn: burning now, no fuel, WorldCover built-up / bare / snow / water, NISAR or Sentinel-2 burn scar, or outside the grid | GEE + NISAR `nisar_burned` + Sentinel-2 `s2_burned` |
 | **D** | 1 or 1/√2 | 1 for N/E/S/W, **1/√2 for diagonals** (they are √2 cells away; equal expected advance per step) | ours |
 
 ### P_m: fuel moisture (fast air moisture × slow ground and vegetation moisture)

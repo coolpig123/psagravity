@@ -47,6 +47,10 @@ def main(argv=None) -> None:
                                     "or a NetCDF with NISAR layers (crs attr + x/y coords; see README)")
     ap.add_argument("--nisar-lookback-days", type=float, default=30.0,
                     help="with --nisar auto: use passes at most this many days before --start")
+    scars = ap.add_mutually_exclusive_group()
+    scars.add_argument("--burn-scars", dest="burn_scars", action="store_true", default=None,
+                       help="add Sentinel-2 dNBR burn scars (default: on unless --inputs is given)")
+    scars.add_argument("--no-burn-scars", dest="burn_scars", action="store_false")
     ap.add_argument("--start", help="UTC time, e.g. 2026-08-09T21:00Z")
     ap.add_argument("--radius-km", type=float, default=5.0)
     ap.add_argument("--res", type=float, default=100.0)
@@ -58,7 +62,7 @@ def main(argv=None) -> None:
     if inputs is None and not a.start:
         raise SystemExit("--start is required unless --inputs is given")
     result = predict(polygon=a.polygon, point=tuple(a.point) if a.point else None, start=a.start,
-                     inputs=inputs, nisar=nisar, radius_km=a.radius_km, res_m=a.res)
+                     inputs=inputs, nisar=nisar, burn_scars=a.burn_scars, radius_km=a.radius_km, res_m=a.res)
     print(summary(result))
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

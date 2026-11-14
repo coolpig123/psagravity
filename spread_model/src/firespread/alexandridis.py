@@ -211,6 +211,9 @@ def p_mask(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
     if "nisar_burned" in ds:
         mask[ds["nisar_burned"].values == 1] = 0
         used.append("nisar_burned")
+    if "s2_burned" in ds:
+        mask[ds["s2_burned"].values == 1] = 0
+        used.append("s2_burned (Sentinel-2 dNBR)")
     return mask, ", ".join(used)
 
 
@@ -367,7 +370,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out.attrs.update({
         **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "nisar_alignment")
            if k in ds.attrs},
-        "model": "Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
+        **{k: v for k, v in ds.attrs.items() if k.startswith("s2_")},
+        "model":"Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
                  "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR) (1+P_vwc_NISAR); "
                  "D = 1/sqrt(2) diagonal",
         "params": repr(params),

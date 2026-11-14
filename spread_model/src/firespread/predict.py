@@ -13,8 +13,9 @@ MODEL_LAYERS = ("terrain", "landcover", "vegetation_cover", "weather")
 
 
 def predict(polygon=None, point=None, start=None, *, inputs: xr.Dataset | None = None,
-            nisar: NisarInput = None, time=None, hours: float = 6.0, radius_km: float = 5.0,
-            res_m: float = 100.0, params: AlexandridisParams | None = None, **fetch_kwargs) -> xr.Dataset:
+            nisar: NisarInput = None, burn_scars: bool | None = None, time=None, hours: float = 6.0,
+            radius_km: float = 5.0, res_m: float = 100.0, params: AlexandridisParams | None = None,
+            **fetch_kwargs) -> xr.Dataset:
     """Spread probabilities around a fire.
 
     Either pass `inputs` (a geelayers Dataset you already have), or the fire (`polygon` drawn by the
@@ -22,11 +23,17 @@ def predict(polygon=None, point=None, start=None, *, inputs: xr.Dataset | None =
     the fire + `radius_km` only.
     `nisar`: a Dataset, a NetCDF path, or a provider function (NisarRequest -> Dataset | None); see
     nisar.py. Without it, the NISAR terms (P_den, P_dry, burn scars) are neutral.
+    `burn_scars`: add Sentinel-2 dNBR burn scars (s2_burned, burn_scars.py) from Earth Engine. Default:
+    on when the inputs are fetched here, off when `inputs` is given (no Earth Engine calls then).
     """
-    if inputs is None:
+    fetched = inputs is None
+    if fetched:
         from geelayers import get_fire_inputs   # only needed when fetching
         fetch_kwargs.setdefault("layers", MODEL_LAYERS)
         inputs = get_fire_inputs(polygon=polygon, point=point, start=start, hours=hours,
                                  radius_km=radius_km, res_m=res_m, **fetch_kwargs)
+    if burn_scars if burn_scars is not None else fetched:
+        from .burn_scars import optical_burn_scars
+        inputs = optical_burn_scars(inputs, time=start or inputs.attrs.get("time_utc"))
     inputs = attach_nisar(inputs, nisar)
     return spread_probabilities(inputs, time=time or start, params=params)
