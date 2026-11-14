@@ -84,6 +84,17 @@ class AlexandridisParams:
     # advance sqrt(2) faster along diagonals. 1/sqrt(2) equalises the expected advance per step;
     # 1.0 reproduces the paper.
     diagonal_factor: float = 1 / math.sqrt(2)
+    # Spotting (firebrand lofting + downwind jump, after Alexandridis et al. 2011):
+    # A burning cell i with wind speed V > spot_min_wind_ms launches a firebrand with probability
+    #   P_spot_launch(i) = clip(spot_prob * (1 + P_veg[i]) * (1 + P_den[i]) * (1 - exp(-(V - V_min) / V_scale)), 0, 1)
+    # Landing cell j ignites with probability P_spot_ignite(j) = clip(P0 (1 + P_veg[j])(1 + P_den[j]) P_m[j] P_mask[j], 0, 1).
+    spot_prob: float = 0.12                 # base per-step launch probability at high wind (0 disables spotting)
+    spot_min_wind_ms: float = 6.0           # no lofting below this wind speed (m/s)
+    spot_wind_scale_ms: float = 4.0         # wind scale for launch probability (m/s above spot_min_wind_ms)
+    spot_min_m: float = 200.0               # minimum jump distance (m)
+    spot_wind_dist_m_per_ms: float = 120.0  # added mean jump distance per m/s above spot_min_wind_ms
+    spot_max_m: float = 3000.0              # maximum jump distance (m)
+    spot_cone_deg: float = 15.0             # angular spread (std dev, degrees) around the downwind bearing
 
 
 # ---- the factors -----------------------------------------------------------------------------
@@ -256,6 +267,30 @@ def p_slope(theta_s_deg: np.ndarray, params: AlexandridisParams) -> np.ndarray:
     return np.exp(params.a * theta_s_deg)
 
 
+def p_spot(u: np.ndarray, v: np.ndarray, veg: np.ndarray, den: np.ndarray,
+           target_factor: np.ndarray, params: AlexandridisParams) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Spotting (firebrand) fields per cell:
+      p_spot_launch (y, x): probability a burning cell launches a firebrand in one CA step
+      p_spot_ignite (y, x): probability a landed firebrand ignites the cell (0 on water/scars/unburnable)
+      spot_dist_m   (y, x): mean downwind jump distance (m) for firebrands launched from the cell
+      spot_dir_deg  (y, x): downwind compass bearing (degrees clockwise from N)
+    """
+    speed = np.hypot(u, v)
+    toward_deg = (np.degrees(np.arctan2(u, v)) % 360.0).astype(np.float32)
+    if params.spot_prob <= 0 or params.spot_max_m <= 0:
+        zeros = np.zeros(u.shape, np.float32)
+        return zeros, zeros, zeros, toward_deg
+    above = np.maximum(speed - params.spot_min_wind_ms, 0.0)
+    wind_factor = np.where(speed > params.spot_min_wind_ms,
+                           1.0 - np.exp(-above / max(params.spot_wind_scale_ms, 1e-6)), 0.0)
+    launch = np.clip(params.spot_prob * np.maximum(1.0 + veg, 0.0) * np.maximum(1.0 + den, 0.0) * wind_factor,
+                     0.0, 1.0).astype(np.float32)
+    ignite = np.clip(target_factor, 0.0, 1.0).astype(np.float32)
+    dist_m = np.clip(params.spot_min_m + params.spot_wind_dist_m_per_ms * above,
+                     params.spot_min_m, params.spot_max_m).astype(np.float32)
+    return launch, ignite, dist_m, toward_deg
+
+
 # ---- grid helpers ---------------------------------------------------------------------------
 
 def shift(a: np.ndarray, dr: int, dc: int, fill: float = 0.0) -> np.ndarray:
@@ -339,6 +374,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_m P_mask
     target_factor = params.p0 * (1 + veg) * (1 + den) * moist * mask
+    spot_launch, spot_ignite, spot_dist_m, spot_dir_deg = p_spot(u, v, veg, den, target_factor, params)
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)
@@ -381,9 +417,13 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
          **{k: (dims2, v) for k, v in moist_parts.items()}, "p_mask": (dims2, mask),
          "mask_reason": (dims2, reason),
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
+         "p_spot_launch": (dims2, spot_launch), "p_spot_ignite": (dims2, spot_ignite),
+         "spot_dist_m": (dims2, spot_dist_m), "spot_dir_deg": (dims2, spot_dir_deg),
          "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
         coords={**coords, "direction": DIR_NAMES})
     out["p_spread"].attrs["description"] = "P(burning cell at (y, x) ignites its neighbour in `direction`), clipped to 1"
+    out["p_spot_launch"].attrs["description"] = "probability a burning cell launches a downwind firebrand in one CA step"
+    out["p_spot_ignite"].attrs["description"] = "probability a landed firebrand ignites the cell"
     out["ignition_prob"].attrs["description"] = "probability the cell catches fire in the next CA step"
     out["mask_reason"].attrs["description"] = "why the cell cannot catch fire: " + "; ".join(
         f"{i} = {r}" for i, r in enumerate(MASK_REASONS))
@@ -392,10 +432,13 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "weather_source")
            if k in ds.attrs},
         **{k: v for k, v in ds.attrs.items() if k.startswith(("s2_", "nisar_"))},
-        "model":"Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
+        "model":"Alexandridis et al. 2008 + moisture + spotting: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
                  "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR) (1+P_vwc_NISAR); "
                  "D = 1/sqrt(2) diagonal",
         "params": repr(params),
+        "spot_min_m": float(params.spot_min_m),
+        "spot_max_m": float(params.spot_max_m),
+        "spot_cone_deg": float(params.spot_cone_deg),
         "weather_time_utc": weather_time,
         "weather_note": time_note,
         "source_p_veg": veg_src, "source_p_den": den_src, "source_p_m": moist_src, "source_p_mask": mask_src,

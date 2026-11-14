@@ -38,9 +38,22 @@ def test_fire_does_not_cross_water_and_stops_when_out():
     landcover[:, C + 2] = 80                              # a river two cells east of the fire
     ds = make_ds(u=8.0)                                   # strong wind toward it
     ds["landcover"] = (("y", "x"), landcover)
-    sim = simulate_spread(spread_probabilities(ds), steps=40, runs=100)
-    bp = sim["burn_prob"].values
+    res = spread_probabilities(ds)
+    sim_no_spot = simulate_spread(res, steps=40, runs=100, spotting=False)
+    bp = sim_no_spot["burn_prob"].values
     assert (bp[:, C + 2:] == 0).all() and bp[:, :C + 2].max() > 0.5
+
+    # With spotting enabled, embers in strong wind (8 m/s) can jump across the narrow river to the eastern bank,
+    # while the water cells themselves never burn.
+    sim_spot = simulate_spread(res, steps=40, runs=200, spotting=True)
+    bp_spot = sim_spot["burn_prob"].values
+    assert (bp_spot[:, C + 2] == 0).all()
+    assert bp_spot[:, C + 3:].max() > 0.05
+
+    # Wide water (all the way to the east edge) or light wind (u = 2 m/s) cannot be crossed even with spotting.
+    calm = make_ds(u=2.0)
+    calm["landcover"] = (("y", "x"), landcover)
+    assert (simulate_spread(spread_probabilities(calm), steps=40, runs=100)["burn_prob"].values[:, C + 2:] == 0).all()
 
 
 def test_reproducible_and_wind_pushes_downwind():
@@ -49,6 +62,16 @@ def test_reproducible_and_wind_pushes_downwind():
     b = simulate_spread(res, steps=4, runs=300, seed=7)["burn_prob"].values
     assert (a == b).all()
     assert a[C, C + 3] > a[C, C - 3]
+
+
+def test_spotting_fields_and_moisture_dependence():
+    calm = spread_probabilities(make_ds(u=3.0))
+    windy_dry = spread_probabilities(make_ds(u=10.0, temp=35.0, rh=10.0))
+    windy_wet = spread_probabilities(make_ds(u=10.0, temp=10.0, rh=95.0))
+    assert float(calm["p_spot_launch"].max()) == 0.0
+    assert float(windy_dry["p_spot_launch"].max()) > 0.0
+    assert float(windy_dry["p_spot_ignite"][C, C + 1]) > float(windy_wet["p_spot_ignite"][C, C + 1])
+    assert float(windy_dry["p_spot_ignite"][C, C]) == 0.0     # already burning -> P_mask = 0
 
 
 def test_bad_arguments():
