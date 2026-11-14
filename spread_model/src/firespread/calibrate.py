@@ -145,10 +145,13 @@ def active_front(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> np.ndarray | No
 
 
 def first_burn_step(p_spread: np.ndarray, start: np.ndarray, max_steps: int, runs: int = RUNS,
-                    seed: int = 0, front: np.ndarray | None = None) -> np.ndarray:
+                    seed: int = 0, front: np.ndarray | None = None, spot: dict | None = None) -> np.ndarray:
     """(runs, h, w) int16: CA step at which each cell first burned in each run (0 = start, 32767 = never).
 
-    `front`: the cells that spread at step 1 (default: all of `start`); the rest of `start` is burned out."""
+    `front`: the cells that spread at step 1 (default: all of `start`); the rest of `start` is burned out.
+    `spot`: spotting as in simulate.py: {launch, ignite, dist_m, dir_deg (y, x arrays), min_m, max_m, cone_deg,
+    res_m}. A newly burning cell launches one firebrand with probability launch; it lands min_m + Exp(dist_m - min_m)
+    (at most max_m) downwind within a normal cone, and ignites the landing cell with probability ignite."""
     never = np.int16(32767)
     h, w = start.shape
     rng = np.random.default_rng(seed)
@@ -167,6 +170,19 @@ def first_burn_step(p_spread: np.ndarray, start: np.ndarray, max_steps: int, run
             r, sy, sx, ty, tx = fr[ok], fy[ok], fx[ok], ty[ok], tx[ok]
             go = rng.random(r.size, dtype=np.float32) < p_spread[k, sy, sx]
             nr.append(r[go]), ny.append(ty[go]), nx.append(tx[go])
+        if spot is not None:
+            out = rng.random(fr.size, dtype=np.float32) < spot["launch"][fy, fx]
+            if out.any():
+                sr, sy, sx = fr[out], fy[out], fx[out]
+                bearing = np.radians(spot["dir_deg"][sy, sx] + rng.normal(0.0, spot["cone_deg"], sr.size))
+                scale = np.maximum(spot["dist_m"][sy, sx] - spot["min_m"], 1.0)
+                dist = np.minimum(spot["min_m"] + rng.exponential(scale), spot["max_m"])
+                ty = sy + np.rint(-dist * np.cos(bearing) / spot["res_m"]).astype(np.int64)   # rows run north -> south
+                tx = sx + np.rint(dist * np.sin(bearing) / spot["res_m"]).astype(np.int64)
+                ok = (ty >= 0) & (ty < h) & (tx >= 0) & (tx < w)
+                sr, ty, tx = sr[ok], ty[ok], tx[ok]
+                lit_spot = rng.random(sr.size, dtype=np.float32) < spot["ignite"][ty, tx]
+                nr.append(sr[lit_spot]), ny.append(ty[lit_spot]), nx.append(tx[lit_spot])
         r, y, x = np.concatenate(nr), np.concatenate(ny), np.concatenate(nx)
         keep = first[r, y, x] == never
         flat = np.unique(((r[keep].astype(np.int64) * h + y[keep]) * w + x[keep]))

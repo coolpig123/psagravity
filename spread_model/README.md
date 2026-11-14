@@ -302,6 +302,58 @@ The fetch caches the inputs in `data/calibration/`, which is not committed.
 4. **Some parameters lie at the edge of the grid** (`p0` = 0.8, the highest value tried), so the search should
    be widened before these values are trusted.
 
+### Joint search with spotting (2026-11-15)
+
+Code: [calibrate_search.py](src/firespread/calibrate_search.py).
+
+```
+python -m firespread.calibrate fetch crosswhite
+python -m firespread.calibrate_search --minutes 40
+```
+
+**What changed from the first calibration:**
+- **Data:** 57 segments on all 4 fires: Bug 7, Colwash 1, Biscar 2, Crosswhite 47.
+- **Spotting:** Gemini's ember jumps, with the same formula, are now part of the calibration simulation. The
+  embers can be lofted by the gust speed (RTMA `gust_ms`, about twice the mean wind) instead of the mean wind.
+- **Search:** 608 random and refined sets of 11 parameters in 40 minutes. The parameters are `p0`, the wind,
+  slope and moisture strengths, CA steps per 12 h, and 6 spotting parameters.
+- **Score:** the share of the new burned area found (growth IoU), averaged with equal weight per fire.
+
+| Growth IoU | Biscar | Bug | Colwash | Crosswhite | Mean |
+|---|---|---|---|---|---|
+| Paper values | 0.044 | 0.060 | 0.028 | 0.160 | 0.073 |
+| Gemini's spotting defaults | 0.043 | 0.060 | 0.027 | 0.160 | 0.073 |
+| Best set, fitted on all 4 fires | 0.085 | 0.064 | 0.033 | 0.161 | **0.086** |
+| **Leave one fire out** (fitted on 3, scored on the 4th) | 0.027 | 0.044 | 0.033 | 0.118 | **0.055** |
+
+The best set:
+- `p0` 0.75, wind ×0.29, slope ×0.63, `b_emc` 0.066, 1 step per 12 h;
+- spotting: chance 0.42, triggered by **gusts** above 4.6 m/s, jumps of at least 835 m plus 229 m per m/s, in a
+  ±12° cone.
+
+**What we learned:**
+1. **The fit doesn't carry over to new fires.** Fitted on all 4 fires the score rises 18% (0.073 → 0.086). But
+   when each fire is held out, the chosen set scores *lower* than the paper's values on 3 of the 4 fires (mean
+   0.055 vs 0.073).
+   - With 11 parameters and 4 fires, the search learns the quirks of individual fires. Most of the gain comes from
+     Biscar's 2 segments.
+   - **So the app keeps the paper's values.**
+2. **Spotting adds almost nothing yet.** The best set with spotting switched off scores 0.085 against 0.086.
+   - Gusts and long jumps are what the search prefers, which is consistent with the Bug Fire picture.
+   - But one random ember per burning cell per step rarely lands where FEDS saw the new area.
+3. **Fewer steps keep winning (1 per 12 h).** Every extra step spreads the fire all round the active front. So
+   the model's main error is *where* the fire goes, not how fast.
+
+**To make training work:**
+- Fit fewer parameters at a time: `p0`, the wind strength and steps per 12 h, then spotting separately.
+- Weight each fire by its number of segments, or add more fires. Colwash has only 1 segment.
+- Use more Monte Carlo runs, to cut the noise.
+- Fix the structural gaps first:
+  - weather that changes hour by hour inside the 12 h;
+  - wind direction at the scale of the fire (RTMA is smoothed at 2.5 km);
+  - a fuel model;
+  - a step duration from the rate of spread (Rothermel).
+
 **Next:**
 - Add **spotting**: a random jump of 0.5–3 km downwind, more likely in strong wind and dry air.
 - Give each step a duration from the rate of spread (Rothermel), with hourly weather.
