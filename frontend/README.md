@@ -43,9 +43,13 @@ within those steps (yellow -> orange -> red). Under the
 map: the most likely spread direction, the expected new burned area, and the weather time, NISAR passes and
 Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction.
 
-Expect **4-7 minutes** from pressing Predict to the map (measured on the Bug Fire: 240-401 s; a repeat of the same
-polygon was not faster). The time goes into the Earth Engine inputs (terrain, land cover, 6 hours of weather), the
-Sentinel-2 burn scars and reading NISAR from ASF. If the NISAR reader is not installed or the Earthdata login
+Expect **about 1 minute** from pressing Predict to the map (measured near the Bug Fire: 75 s for a new area,
+68 s for a polygon 1 km from an earlier one, 52 s for the same polygon again). Most of it is the Sentinel-2 burn
+scars and the Earth Engine inputs; NISAR takes ~50 s the first time for an area and a few seconds after that
+(downloaded pieces are cached in `real_fires/data/nisar_cache/raw/chunks`).
+
+After pulling new code, restart `npm run dev`: the Python server keeps the code it started with. A second server
+on the same port now refuses to start (before, on Windows, both ran and the old one kept answering). If the NISAR reader is not installed or the Earthdata login
 fails, the prediction still runs without NISAR and a note says so.
 
 Request and response format: [spread_model/src/firespread/web.py](../spread_model/src/firespread/web.py).

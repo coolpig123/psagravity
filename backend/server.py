@@ -161,8 +161,16 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")  # so "km²" prints on Windows terminals
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    # On Windows, SO_REUSEADDR (Python's default for HTTP servers) lets a second server bind the same port
+    # silently, and requests keep going to the old one (with old code). Refuse to start instead.
+    ThreadingHTTPServer.allow_reuse_address = os.name != "nt"
+    try:
+        httpd = ThreadingHTTPServer(("localhost", port), Handler)
+    except OSError as e:
+        sys.exit(f"Port {port} is already in use ({e}): another API server is running. Stop it first "
+                 "(Ctrl+C in its terminal), or start this one on another port: python backend/server.py 8001")
     print(f"API server on http://localhost:{port}  (Ctrl+C to stop)", flush=True)
     try:
-        ThreadingHTTPServer(("localhost", port), Handler).serve_forever()
+        httpd.serve_forever()
     except KeyboardInterrupt:
         pass
