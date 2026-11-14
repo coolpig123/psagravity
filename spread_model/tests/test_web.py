@@ -103,6 +103,18 @@ def test_empty_map_says_why():
     msg = no_spread_reason(wet_res, min_prob=1.0)
     assert "every chance of spreading is below" in msg and "equilibrium moisture" in msg
 
+    # Missing weather (emc_pct = NaN) or dry air must not print "equilibrium moisture nan%" or blame moist air
+    no_wx = spread_probabilities(make_ds())
+    assert "nan%" not in no_spread_reason(no_wx, min_prob=1.0)
+    dry_res = spread_probabilities(make_ds(temp=35.0, rh=10.0))
+    assert "keeps fuel moist" not in no_spread_reason(dry_res, min_prob=1.0)
+
+    # After the simulation the map uses burn_prob, so the note must quote burn_prob too (not ignition_prob)
+    sim = spread_probabilities(make_ds()).copy()
+    sim["ignition_prob"] = sim["ignition_prob"] * 0 + 0.012          # one step: 1.2%
+    sim["burn_prob"] = sim["ignition_prob"] * 0 + 0.005              # 200 runs: 0.5% -> nothing on the map
+    assert "(highest 0.5%)" in no_spread_reason(sim)
+
     def fake(**kw):
         d = make_ds()
         d["landcover"] = (("y", "x"), np.full((N, N), 80, np.int16))
