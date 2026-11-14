@@ -5,4 +5,5 @@ gee_layers/data/
 __pycache__/
 *.pyc
 *.egg-info/
+*.tif
 real_fires/data/fires/crosswhite/processed/fire_points.csv
