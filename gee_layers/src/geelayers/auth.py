@@ -33,7 +33,8 @@ def init(project: str | None = None, force: bool = False) -> None:
             "EE_PROJECT is not set. Put your Earth Engine Cloud project id in "
             f"{PROJECT_DIR / '.env'} (see .env.example) or pass init(project=...).")
     key = os.environ.get("EE_SERVICE_ACCOUNT_KEY")
-    credentials = ee.ServiceAccountCredentials(None, key_file=key) if key else None
+    # "persistent" = the login saved by `earthengine authenticate` (None would mean no credentials)
+    credentials = ee.ServiceAccountCredentials(None, key_file=key) if key else "persistent"
     try:
         ee.Initialize(credentials, project=project, opt_url=HIGH_VOLUME_URL)
     except Exception as e:  # most common: never ran `earthengine authenticate`

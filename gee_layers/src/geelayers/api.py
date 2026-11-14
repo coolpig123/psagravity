@@ -18,11 +18,11 @@ import xarray as xr
 
 from . import fetch
 from .auth import init
-from .derive import slope_aspect, wind_speed_dir
+from .derive import decode_evc, slope_aspect, wind_speed_dir
 from .grid import Grid
 from .layers import LAYERS, VARIABLES, WEATHER
 
-DEFAULT_LAYERS = ("terrain", "landcover", "fuel_model", "vegetation", "fuel_dryness", "weather")
+DEFAULT_LAYERS = ("terrain", "landcover", "vegetation_cover", "vegetation", "fuel_dryness", "weather")
 
 
 def _utc(t) -> pd.Timestamp:
@@ -72,7 +72,7 @@ def get_weather(grid: Grid, start, end, source: str = "rtma", step_hours: int = 
     if step_hours > 1:
         wanted = pd.date_range(start.ceil("h"), end, freq=f"{step_hours}h", inclusive="left")
         col = col.filter(ee.Filter.inList("valid_time", [int(t.timestamp() * 1000) for t in wanted]))
-    col = col.distinct("valid_time").sort("valid_time")
+    col = ee.ImageCollection(col.distinct("valid_time")).sort("valid_time")   # distinct() returns a FeatureCollection
     times_ms = col.aggregate_array("valid_time").getInfo()
     if not times_ms:
         raise LookupError(f"{source}: no weather between {start} and {end} here. The dataset may not reach this "
@@ -96,7 +96,7 @@ def get_layers(grid: Grid, time=None, layers: Iterable[str] = DEFAULT_LAYERS,
 
     `time` is the moment the prediction starts (e.g. the ignition time). Time-dependent layers
     only use data from before it: vegetation = 30 days before, fuel_dryness = latest day before,
-    weather = latest hour at or before `time`. Static layers (terrain, landcover, fuel_model)
+    weather = latest hour at or before `time`. Static layers (terrain, landcover, vegetation_cover)
     don't need a time.
     """
     init()
@@ -132,6 +132,10 @@ def get_layers(grid: Grid, time=None, layers: Iterable[str] = DEFAULT_LAYERS,
                 ds[v] = (("y", "x"), np.where(np.isnan(arr[k]), -1, np.round(arr[k])).astype(np.int16), _attrs(v))
             else:
                 ds[v] = (("y", "x"), arr[k], _attrs(v))
+    if "evc" in ds:
+        lifeform, cover = decode_evc(ds["evc"].values)
+        ds["fuel_lifeform"] = (("y", "x"), lifeform, _attrs("fuel_lifeform"))
+        ds["cover_pct"] = (("y", "x"), cover, _attrs("cover_pct"))
     if "elevation_m" in ds:
         slope, aspect = slope_aspect(ds["elevation_m"].values, grid.res)
         ds["slope_deg"] = (("y", "x"), slope, _attrs("slope_deg"))
