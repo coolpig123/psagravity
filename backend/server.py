@@ -105,6 +105,16 @@ def run_predict(body: dict) -> dict:
     from firespread.web import predict_payload   # imported here so /api/polygon works without the spread model
     print(f"\nRunning predict(start={body.get('start')}, radius_km={body.get('radius_km', 5)}, "
           f"use_nisar={body.get('use_nisar', True)}, burn_scars={body.get('burn_scars', True)}) ...", flush=True)
+    try:   # where it is, so a problem can be reproduced later
+        geom = body["polygon"]
+        geom = geom.get("features", [geom])[0] if geom.get("type") == "FeatureCollection" else geom
+        ring = (geom.get("geometry") or geom)["coordinates"][0]
+        lons, lats = [p[0] for p in ring], [p[1] for p in ring]
+        print(f"  polygon: {len(ring) - 1} points, lat {min(lats):.5f}..{max(lats):.5f}, "
+              f"lon {min(lons):.5f}..{max(lons):.5f}", flush=True)
+        print(f"  GeoJSON: {json.dumps(geom.get('geometry') or geom)}", flush=True)
+    except (KeyError, IndexError, TypeError, AttributeError):
+        pass
     t0 = time.time()
     out = predict_payload(body)
     print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_cells']} cells on the map")

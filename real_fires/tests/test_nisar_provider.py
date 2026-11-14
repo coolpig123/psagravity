@@ -242,6 +242,23 @@ def test_dataset_missing_from_older_granule_is_no_data(tmp_path, monkeypatch):
     assert remote.opens == 1                                          # the remote reader really ran
 
 
+def test_granule_without_the_group_is_no_data(tmp_path, monkeypatch):
+    """Some GCOV granules (seen over Nigeria) have no frequencyA: no data for that granule, not an error."""
+    g = model_grid()
+    tg = na.TargetGrid.from_request(Request(g))
+    path = write_gcov(tmp_path / "g.h5", g)
+    with h5py.File(path, "a") as f:
+        f.move(na.GCOV_GROUP, na.GCOV_GROUP.replace("frequencyA", "frequencyB"))
+    remote = LocalAsRemote()
+    monkeypatch.setattr(na, "_remote", lambda url: (remote, url, None))
+    tg2 = na.TargetGrid.from_request(Request(model_grid(radius_km=1.5)))    # new grid: no whole-result cache hit
+    for i, (source, grid) in enumerate(((path, tg), ("remote://" + str(path), tg), ("remote://" + str(path), tg2))):
+        out = na.read_layers(source, na.GCOV_GROUP, ["HHHH", "HVHV", "mask"], grid, prepare=npv._gcov_valid,
+                             cache_dir=tmp_path / ("c" if i else "local"), cache_key="B")
+        assert set(out) == {"HHHH", "HVHV"} and all(np.isnan(v).all() for v in out.values())
+    assert remote.opens == 1                    # the second remote read knew from the cache: not opened again
+
+
 def test_stalled_remote_read_is_retried(tmp_path, monkeypatch):
     g = model_grid()
     tg = na.TargetGrid.from_request(Request(g))
