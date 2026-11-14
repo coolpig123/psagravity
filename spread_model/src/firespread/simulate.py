@@ -26,14 +26,26 @@ DEFAULT_RUNS = 200
 
 
 def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = DEFAULT_RUNS,
-                    seed: int | None = 0) -> xr.Dataset:
+                    seed: int | None = 0, spotting: bool = True) -> xr.Dataset:
     """Add burn_prob and arrival_step (y, x) to a spread_probabilities() result. Deterministic for a fixed seed."""
     if steps < 1 or runs < 1:
         raise ValueError("steps and runs must be >= 1")
     p = np.nan_to_num(result["p_spread"].values.astype(np.float32))
     start = result["burning"].values.astype(bool)
     h, w = start.shape
+    res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
     rng = np.random.default_rng(seed)
+
+    use_spot = (spotting and "p_spot_launch" in result and "p_spot_ignite" in result
+                and float(np.nanmax(result["p_spot_launch"].values)) > 0)
+    if use_spot:
+        p_launch = np.nan_to_num(result["p_spot_launch"].values.astype(np.float32))
+        p_ignite = np.nan_to_num(result["p_spot_ignite"].values.astype(np.float32))
+        spot_dist = np.nan_to_num(result["spot_dist_m"].values.astype(np.float32))
+        spot_dir = np.nan_to_num(result["spot_dir_deg"].values.astype(np.float32))
+        spot_min_m = float(result.attrs.get("spot_min_m", 200.0))
+        spot_max_m = float(result.attrs.get("spot_max_m", 3000.0))
+        spot_cone_deg = float(result.attrs.get("spot_cone_deg", 15.0))
 
     burned = np.broadcast_to(start, (runs, h, w)).copy()
     front_r, front_y, front_x = np.nonzero(burned)            # burning cells (run, row, col)
@@ -49,6 +61,19 @@ def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = 
             r, sy, sx, ty, tx = front_r[inside], front_y[inside], front_x[inside], ty[inside], tx[inside]
             go = rng.random(r.size, dtype=np.float32) < p[k, sy, sx]
             new_r.append(r[go]), new_y.append(ty[go]), new_x.append(tx[go])
+        if use_spot:
+            launched = rng.random(front_r.size, dtype=np.float32) < p_launch[front_y, front_x]
+            if launched.any():
+                sr, sy, sx = front_r[launched], front_y[launched], front_x[launched]
+                bearing = np.radians(spot_dir[sy, sx] + rng.normal(0.0, spot_cone_deg, sr.size))
+                scale = np.maximum(spot_dist[sy, sx] - spot_min_m, 1.0)
+                dist = np.minimum(spot_min_m + rng.exponential(scale), spot_max_m)
+                ty = sy + np.rint(-dist * np.cos(bearing) / res).astype(np.int64)
+                tx = sx + np.rint(dist * np.sin(bearing) / res).astype(np.int64)
+                inside = (ty >= 0) & (ty < h) & (tx >= 0) & (tx < w)
+                sr, ty, tx = sr[inside], ty[inside], tx[inside]
+                lit_spot = rng.random(sr.size, dtype=np.float32) < p_ignite[ty, tx]
+                new_r.append(sr[lit_spot]), new_y.append(ty[lit_spot]), new_x.append(tx[lit_spot])
         r, y, x = np.concatenate(new_r), np.concatenate(new_y), np.concatenate(new_x)
         fresh = ~burned[r, y, x]
         r, y, x = r[fresh], y[fresh], x[fresh]
@@ -66,10 +91,9 @@ def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = 
     out["burn_prob"] = (("y", "x"), (hits / runs).astype(np.float32),
                         {"description": f"share of {runs} runs in which the cell burned within {steps} CA steps"})
     out["arrival_step"] = (("y", "x"), arrival, {"description": "mean CA step at which the cell ignited"})
-    res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
     lit = hits > 0
     reached_edge = lit[0].any() or lit[-1].any() or lit[:, 0].any() or lit[:, -1].any()
-    out.attrs.update({"sim_steps": steps, "sim_runs": runs,
+    out.attrs.update({"sim_steps": steps, "sim_runs": runs, "sim_spotting": int(bool(spotting)),
                       "sim_expected_area_km2": float(hits.sum() / runs) * res * res / 1e6,
                       "sim_reached_grid_edge": int(reached_edge)})
     return out
