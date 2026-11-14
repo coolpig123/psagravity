@@ -368,9 +368,9 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out["ignition_prob"].attrs["description"] = "probability the cell catches fire in the next CA step"
     weather_time = (str(pd.Timestamp(snap["time"].values)) if "time" in snap.coords else "")
     out.attrs.update({
-        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "nisar_alignment")
+        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "weather_source")
            if k in ds.attrs},
-        **{k: v for k, v in ds.attrs.items() if k.startswith("s2_")},
+        **{k: v for k, v in ds.attrs.items() if k.startswith(("s2_", "nisar_"))},
         "model":"Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
                  "P_m = exp(-b_emc (EMC_Simard(T, RH) - emc_ref)) (1+P_dry_NISAR) (1+P_vwc_NISAR); "
                  "D = 1/sqrt(2) diagonal",

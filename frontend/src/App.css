@@ -29,6 +29,50 @@ html, body, #root { margin: 0; height: 100%; }
   cursor: default;
 }
 
+.toolbar { align-items: center; flex-wrap: wrap; }
+
+.start {
+  font: 14px system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.start input {
+  font: 13px ui-monospace, Consolas, monospace;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.toolbar button.predict:not(:disabled) {
+  background: #e4572e;
+  border-color: #e4572e;
+  color: #fff;
+}
+
+.panel {
+  width: 800px;
+  min-height: 84px;
+  font: 13px system-ui, sans-serif;
+  color: #333;
+}
+
+.panel p { margin: 0 0 4px; }
+.panel .error { color: #d62828; }
+.panel .note { color: #8a5a00; }
+
+.ramp {
+  display: inline-block;
+  width: 120px;
+  height: 10px;
+  margin: 0 6px;
+  vertical-align: middle;
+  border-radius: 2px;
+  background: linear-gradient(to right, #ffe66d, #ff9f1c 35%, #e4572e 70%, #9d0208);
+}
+
 .area {
   margin-left: auto;
   font: 14px system-ui, sans-serif;
