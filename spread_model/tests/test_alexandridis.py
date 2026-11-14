@@ -214,6 +214,18 @@ def test_scars_from_dnbr_and_block_mean():
     assert (g.epsg, g.x0, g.y0, g.res, g.width, g.height) == (32610, 0.0, 1000.0, 100.0, N, N)
 
 
+def test_fine_grid_falls_back_on_huge_areas():
+    from geelayers import Grid
+    from geelayers.fetch import MAX_CELLS
+    from firespread.burn_scars import _fine_grid
+    small = Grid(32610, 0.0, 1000.0, 100.0, 400, 400)               # 40 km: 20 m grid of 2000 x 2000
+    fine = _fine_grid(small)
+    assert (fine.res, fine.width, fine.height, fine.x0, fine.y0) == (20.0, 2000, 2000, 0.0, 1000.0)
+    huge = Grid(32610, 0.0, 1000.0, 100.0, 1000, 1000)              # 100 km: 20 m grid would be 25 M cells
+    assert 1000 * 1000 * 25 > MAX_CELLS and _fine_grid(huge) is None
+    assert _fine_grid(Grid(32610, 0.0, 1000.0, 20.0, 10, 10)) is None   # already 20 m
+
+
 def test_predict_with_given_inputs_skips_burn_scars_and_keeps_s2():
     ds = make_ds()
     assert "s2_burned" not in predict(inputs=ds).attrs.get("source_p_mask", "")   # no Earth Engine call
@@ -429,6 +441,10 @@ def test_predict_fetches_only_model_layers(monkeypatch):
         seen.update(kw)
         return make_ds()
     monkeypatch.setattr(geelayers, "get_fire_inputs", fake)
+    import firespread.burn_scars as bs
+    scars = []
+    monkeypatch.setattr(bs, "optical_burn_scars", lambda ds, time=None: scars.append(time) or ds)  # no Earth Engine
     predict(point=(39.7, -120.0), start="2026-08-09T21:00Z")
     assert tuple(seen["layers"]) == MODEL_LAYERS
+    assert scars == ["2026-08-09T21:00Z"]           # burn scars are on by default when fetching
     assert "vegetation" not in MODEL_LAYERS and "fuel_dryness" not in MODEL_LAYERS
