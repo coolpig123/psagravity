@@ -199,7 +199,7 @@ def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, 
 
 # Why a cell cannot catch fire (result variable mask_reason); the first reason that applies is kept.
 MASK_REASONS = ("can burn", "burning now", "no fuel (LANDFIRE)", "built-up, bare, snow or water (ESA WorldCover)",
-                "already burned or water (NISAR)", "burn scar (Sentinel-2)")
+                "already burned or water (NISAR)", "burn scar (Sentinel-2)", "no land cover data (open sea)")
 
 
 def mask_reasons(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
@@ -214,8 +214,11 @@ def mask_reasons(ds: xr.Dataset, burning: np.ndarray) -> tuple[np.ndarray, str]:
         mark(ds["fuel_lifeform"].values == 0, 2)
         used.append("fuel_lifeform = 0")
     if "landcover" in ds:
-        mark(np.isin(ds["landcover"].values, WC_NOT_BURNABLE), 3)
-        used.append(f"landcover in {WC_NOT_BURNABLE}")
+        lc = ds["landcover"].values
+        mark(np.isin(lc, WC_NOT_BURNABLE), 3)
+        # WorldCover maps land only: no class (-1 / NaN) is open sea, not unknown fuel (fire spread over the ocean)
+        mark(~np.isfinite(lc) | (lc < 0) if lc.dtype.kind == "f" else lc < 0, 6)
+        used.append(f"landcover in {WC_NOT_BURNABLE} or missing (open sea)")
     if "nisar_burned" in ds:
         mark(ds["nisar_burned"].values == 1, 4)
         used.append("nisar_burned")

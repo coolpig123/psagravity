@@ -198,6 +198,17 @@ def test_p_mask():
     assert mask.tolist()[0] == [0, 1, 0, 0, 0]               # burning, ok, no fuel, water, NISAR burn scar
 
 
+def test_no_land_cover_is_open_sea_not_fuel():
+    """WorldCover has no class over the open sea (-1): fire must not spread there (it did, 64 km2 on the ocean)."""
+    from firespread.alexandridis import MASK_REASONS, mask_reasons
+    ds = xr.Dataset({"landcover": (("y", "x"), np.array([[20, -1, 80]], np.int16))})
+    reason, _ = mask_reasons(ds, np.zeros((1, 3), bool))
+    assert [MASK_REASONS[r] for r in reason[0]] == ["can burn", "no land cover data (open sea)",
+                                                    "built-up, bare, snow or water (ESA WorldCover)"]
+    sea = make_ds(landcover=-1)
+    assert float(spread_probabilities(sea)["ignition_prob"].max()) == 0.0
+
+
 def test_p_mask_sentinel2_scar():
     ds = xr.Dataset({"s2_burned": (("y", "x"), np.array([[0, 1, -1]], np.int16))})
     mask, src = p_mask(ds, np.zeros((1, 3), bool))
