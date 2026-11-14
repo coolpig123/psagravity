@@ -47,6 +47,14 @@ within those steps (yellow -> orange -> red). Under the
 map: the most likely spread direction, the expected new burned area, and the weather time, NISAR passes and
 Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction.
 
+**Arrival times:** the server also runs the survival model (`spread_model/src/firespread/survival.py`, trained on
+the real fires). Under the map, **Show** switches the colours between the CA chance, the **median hours until the
+fire arrives** (dark red = soon, yellow = days), and the **chance it arrives within 6 / 12 / 24 / 48 h**. Click a
+cell for all its numbers. The panel gives the expected burned area within each horizon. Needs `xgboost` and `scipy`
+in the server's venv (`pip install -r spread_model/requirements.txt`); without them, or without the model file, the
+map shows the CA chance only and a note says why. How good it is: see "When: arrival time per cell" in
+[spread_model/README.md](../spread_model/README.md).
+
 Expect **about 1 minute** from pressing Predict to the map (measured near the Bug Fire: 75 s for a new area,
 68 s for a polygon 1 km from an earlier one, 52 s for the same polygon again). Most of it is the Sentinel-2 burn
 scars and the Earth Engine inputs; NISAR takes ~50 s the first time for an area and a few seconds after that
