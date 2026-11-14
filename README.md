@@ -63,6 +63,7 @@ cp .env.example .env                                        # FIRMS_MAP_KEY (+ E
 | `real_fires/docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
 | `real_fires/app/` | האתר |
 | `gee_layers/` | שכבות קלט למודל מ-Google Earth Engine: גובה, שיפוע, כיסוי קרקע, דלק, יובש, מזג אוויר (ראו `gee_layers/README.md`) |
+| `spread_model/` | מודל Alexandridis: הסתברות התפשטות לכל תא ליד האש, והכיוון הסביר ביותר (נוסחאות ב-`spread_model/README.md`) |
 
 </div>
 
@@ -167,6 +168,7 @@ psagravity/
 ├── README.md, CLAUDE.md
 ├── docs/                  # project figures (architecture.png)
 ├── gee_layers/            # model inputs from Google Earth Engine: terrain, fuels, dryness, weather (see its README)
+├── spread_model/          # Alexandridis CA: spread probability per cell + most likely direction (see its README)
 └── real_fires/            # ground truth from real fires
     ├── src/firedata/      # pipeline code (package)
     ├── scripts/           # build_ground_truth.py, test_app.py

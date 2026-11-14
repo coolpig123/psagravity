@@ -42,6 +42,8 @@ real_fires/                                              # ground truth from rea
   .env (not committed), .env.example, requirements*.txt, pyproject.toml
 gee_layers/                                              # model inputs from Google Earth Engine (package geelayers)
   src/geelayers/, tests/, data/ (outputs, not committed), .env (EE_PROJECT), README.md
+spread_model/                                            # Alexandridis spread probabilities (package firespread)
+  src/firespread/, tests/, data/ (outputs, not committed), README.md (formulas)
 ```
 
 Never put new files in the repo root. Every output goes in a folder with a clear name (real_fires/app/,
