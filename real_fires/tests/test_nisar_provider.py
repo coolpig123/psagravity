@@ -167,6 +167,64 @@ def test_cache_avoids_rereading(tmp_path, monkeypatch):
     assert np.array_equal(first["HVHV"], second["HVHV"], equal_nan=True)
 
 
+class LocalAsRemote:
+    """Stands in for the Earthdata HTTPS filesystem: serves local files, counts opens and range requests."""
+    def __init__(self):
+        import fsspec
+        self.fs, self.opens, self.ranges = fsspec.filesystem("file"), 0, 0
+
+    def open(self, url, **kw):
+        self.opens += 1
+        return self.fs.open(url.removeprefix("remote://"), "rb")
+
+    def cat_ranges(self, paths, starts, ends, on_error="raise"):
+        self.ranges += len(paths)
+        return self.fs.cat_ranges([p.removeprefix("remote://") for p in paths], starts, ends)
+
+
+def chunked_copy(src, dst, chunks=(64, 64)):
+    """The same granule stored like real NISAR files: chunked, deflate + shuffle (HH/HV), deflate only (mask)."""
+    with h5py.File(src, "r") as fi, h5py.File(dst, "w") as fo:
+        gi, go = fi[na.GCOV_GROUP], fo.create_group(na.GCOV_GROUP)
+        for k in ("xCoordinates", "yCoordinates", "projection"):
+            gi.copy(k, go)
+        for k in ("HHHH", "HVHV", "mask"):
+            d = go.create_dataset(k, data=gi[k][:], chunks=chunks, compression="gzip",
+                                  compression_opts=1 if k != "mask" else 9, shuffle=k != "mask")
+            d.attrs.update(gi[k].attrs)
+    return dst
+
+
+def test_remote_parallel_chunks_match_h5py_and_are_cached(tmp_path, monkeypatch):
+    g = model_grid()
+    def pattern(xx, yy, hh, hv, mask):                          # varied values and some invalid samples
+        hv[:] = (0.02 + 0.01 * np.sin(xx / 300) * np.cos(yy / 200)).astype(np.float32)
+        mask[(xx // 170 + yy // 130) % 7 == 0] = 0
+        mask[:, :25] = 255
+    local = chunked_copy(write_gcov(tmp_path / "plain.h5", g, edit=pattern), tmp_path / "chunked.h5")
+    remote = LocalAsRemote()
+    monkeypatch.setattr(na, "_remote", lambda url: (remote, url, None))
+    url = "remote://" + str(local)
+    names = ["HHHH", "HVHV", "mask"]
+
+    tg = na.TargetGrid.from_request(Request(g))
+    want = na.read_layers(local, na.GCOV_GROUP, names, tg, prepare=npv._gcov_valid, cache_dir=None)
+    got = na.read_layers(url, na.GCOV_GROUP, names, tg, prepare=npv._gcov_valid, cache_dir=tmp_path / "c",
+                         cache_key="G1")
+    for k in want:
+        assert np.allclose(got[k], want[k], equal_nan=True, rtol=1e-6)   # identical up to float summation order
+    assert remote.opens == 1 and remote.ranges > 0
+
+    # another grid over the same area (a new polygon): no remote access at all, from the chunk cache
+    tg2 = na.TargetGrid.from_request(Request(model_grid(radius_km=1.5)))
+    remote.opens, remote.ranges = 0, 0
+    again = na.read_layers(url, na.GCOV_GROUP, names, tg2, prepare=npv._gcov_valid, cache_dir=tmp_path / "c",
+                           cache_key="G1")
+    assert remote.opens == 0 and remote.ranges == 0
+    direct = na.read_layers(local, na.GCOV_GROUP, names, tg2, prepare=npv._gcov_valid, cache_dir=None)
+    assert np.allclose(again["HVHV"], direct["HVHV"], equal_nan=True, rtol=1e-6)
+
+
 def test_stalled_remote_read_is_retried(tmp_path, monkeypatch):
     g = model_grid()
     tg = na.TargetGrid.from_request(Request(g))
