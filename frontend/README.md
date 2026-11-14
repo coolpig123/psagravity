@@ -50,8 +50,8 @@ Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction
 **Arrival times:** the server also runs the survival model (`spread_model/src/firespread/survival.py`, trained on
 the real fires). Under the map, **Show** switches the colours between the CA chance, the **chance the fire ever
 gets there**, the **median hours until it arrives if it does** (dark red = soon, yellow = days; cells with at least a
-10% chance), and the **chance it arrives within 6 / 12 / 24 / 48 h**. Click a
-cell for all its numbers. The panel gives the expected burned area within each horizon. Needs `xgboost` and `scipy`
+10% chance), and the **chance it arrives within 6 / 12 / 24 / 48 h**. Click a cell for all its numbers, including the
+25-75% range of the arrival time (fire speed varies ~10x between fires, so the range is wide). The panel gives the expected burned area within each horizon. Needs `xgboost` and `scipy`
 in the server's venv (`pip install -r spread_model/requirements.txt`); without them, or without the model file, the
 map shows the CA chance only and a note says why. How good it is: see "When: arrival time per cell" in
 [spread_model/README.md](../spread_model/README.md).
