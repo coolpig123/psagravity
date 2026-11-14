@@ -1,4 +1,5 @@
-"""Offline tests of the arrival-time (survival) model: features, labels, fit / save / load, web payload."""
+"""Offline tests of the arrival-time (cure-fraction survival) model: features, labels, metrics, fit / save / load,
+web payload."""
 import json
 
 import numpy as np
@@ -8,7 +9,8 @@ import pytest
 pytest.importorskip("xgboost")
 
 from firespread import spread_probabilities, survival
-from firespread.survival import FEATURES, HORIZONS_H, ArrivalModel, cell_features, fit, predict_arrival
+from firespread.survival import (FEATURES, HORIZONS_H, ArrivalModel, cell_features, fit, predict_arrival,
+                                 weighted_auc)
 from firespread.web import predict_payload
 from test_alexandridis import C, N, make_ds
 from test_web import BODY, fake_predict
@@ -16,15 +18,39 @@ from test_web import BODY, fake_predict
 T0 = "2026-08-09T21:00Z"
 
 
-def test_cell_features_geometry():
+def test_fastest_path_features():
+    f = cell_features(spread_probabilities(make_ds(u=5.0)))            # wind blowing toward the east
+    assert set(f) == set(FEATURES) and np.isnan(f["path_steps"][C, C])  # burning cell: no feature
+    assert f["path_steps"][C, C + 4] < f["path_steps"][C - 4, C] < f["path_steps"][C, C - 4]   # down < cross < upwind
+    assert f["path_len_m"][C, C + 4] == pytest.approx(400.0)
+    assert f["path_wind_along_ms"][C, C + 4] == pytest.approx(5.0) and f["path_wind_along_ms"][C, C - 4] == pytest.approx(-5.0)
+
     elev = np.tile(np.arange(N, dtype=np.float32) * 10.0, (N, 1))       # rises 10 m per cell toward the east
-    f = cell_features(spread_probabilities(make_ds(u=5.0, elev=elev)), T0)   # wind blowing toward the east
-    assert set(f) == set(FEATURES)
-    assert f["dist_front_m"][C, C] == 0 and f["dist_front_m"][C, C + 3] == pytest.approx(300.0)
-    assert f["wind_along_ms"][C, C + 3] == pytest.approx(5.0) and f["wind_along_ms"][C, C - 3] == pytest.approx(-5.0)
-    assert f["wind_cross_ms"][C - 3, C] == pytest.approx(5.0)            # north of the fire: wind blows across
-    assert f["slope_path_deg"][C, C + 3] > 0 > f["slope_path_deg"][C, C - 3]   # uphill east, downhill west
-    assert f["ca_burn_prob"][C, C + 1] > f["ca_burn_prob"][C, C - 1]      # downwind burns more often
+    f = cell_features(spread_probabilities(make_ds(elev=elev)))
+    assert f["path_up_m"][C, C + 3] == pytest.approx(30.0) and f["path_down_m"][C, C + 3] == 0
+    assert f["path_down_m"][C, C - 3] == pytest.approx(30.0) and f["path_up_m"][C, C - 3] == 0
+
+
+def test_barriers_are_walls_not_shortcuts():
+    ds = make_ds()
+    lc = np.full((N, N), 20, np.int16)
+    lc[:, C + 2] = 80                                                   # a river of water east of the fire
+    ds["landcover"] = (("y", "x"), lc)
+    f = cell_features(spread_probabilities(ds))
+    assert np.isnan(f["path_steps"][C, C + 3]) and np.isfinite(f["path_steps"][C, C + 1])   # unreachable beyond
+    lc[0, C + 2] = 20                                                   # a crossing at the top edge
+    ds["landcover"] = (("y", "x"), lc)
+    f = cell_features(spread_probabilities(ds))
+    assert f["path_len_m"][C, C + 3] > 1000                             # goes round, not 300 m straight across
+
+
+def test_neutral_path_ignores_nisar_terms():
+    from test_alexandridis import nisar_on
+    from firespread import attach_nisar
+    ds = make_ds(u=3.0)
+    base = cell_features(spread_probabilities(ds))
+    wet = attach_nisar(ds, nisar_on(ds, nisar_soil_moisture=np.full((N, N), 0.4, np.float32)))
+    assert np.allclose(cell_features(spread_probabilities(wet))["path_steps"], base["path_steps"], equal_nan=True)
 
 
 def test_arrival_bounds_from_viirs_and_perimeter():
@@ -33,17 +59,26 @@ def test_arrival_bounds_from_viirs_and_perimeter():
         "type": "Polygon", "coordinates": [[[-120.06, 39.71], [-120.02, 39.71], [-120.02, 39.74], [-120.06, 39.74],
                                             [-120.06, 39.71]]]}}]}
     grid = Grid.from_polygon(square, buffer_km=1.0, res_m=100.0)
-    t = pd.to_datetime(["2026-08-09 09:00", "2026-08-09 12:00", "2026-08-09 21:00", "2026-08-09 21:05"], utc=True)
-    pts = pd.DataFrame({"time_utc": t, "lat": [39.72, 39.73, 39.725, 39.90], "lon": [-120.05, -120.03, -120.04, -120.04],
-                        "source": ["VIIRS_SNPP", "VIIRS_NOAA20", "VIIRS_NOAA21", "VIIRS_SNPP"], "ambiguous": False})
-    truth = survival.FireTruth("test", square, {"features": []}, pts, pd.Timestamp("2026-08-09 06:00", tz="UTC"))
+    t = pd.to_datetime(["2026-08-09 09:00", "2026-08-09 12:00", "2026-08-09 21:00", "2026-08-09 21:05",
+                        "2026-08-10 03:00"], utc=True)
+    pts = pd.DataFrame({"time_utc": t, "lat": [39.72, 39.73, 39.725, 39.90, 39.735],
+                        "lon": [-120.05, -120.03, -120.04, -120.04, -120.055],
+                        "source": ["VIIRS_SNPP", "VIIRS_NOAA20", "VIIRS_NOAA21", "VIIRS_SNPP", "VIIRS_SNPP"],
+                        "ambiguous": False})
+    # a FEDS perimeter at 13:00 already contains the cell VIIRS only detects at 03:00 the next day
+    feds_poly = [[[-120.058, 39.733], [-120.052, 39.733], [-120.052, 39.737], [-120.058, 39.737], [-120.058, 39.733]]]
+    feds = {"features": [{"type": "Feature", "properties": {"obs_time_utc": "2026-08-09T13:00:00Z"},
+                          "geometry": {"type": "Polygon", "coordinates": feds_poly}}]}
+    truth = survival.FireTruth("test", square, feds, pts, pd.Timestamp("2026-08-09 06:00", tz="UTC"))
     b = survival.arrival_bounds(grid, truth)
     hour = lambda s: (s - pd.Timestamp("2026-08-09", tz="UTC").timestamp()) / 3600   # noqa: E731
     r, c = grid.cell_of(39.73, -120.03)
     assert hour(b["upper"][r, c]) == pytest.approx(12.0) and hour(b["lower"][r, c]) == pytest.approx(9.0)
     r, c = grid.cell_of(39.72, -120.05)
     assert hour(b["upper"][r, c]) == pytest.approx(9.0) and hour(b["lower"][r, c]) == pytest.approx(6.0)  # ignition
-    assert len(b["passes"]) == 3                                        # 21:00 and 21:05 are one pass
+    r, c = grid.cell_of(39.735, -120.055)
+    assert hour(b["upper"][r, c]) == pytest.approx(13.0) and hour(b["lower"][r, c]) == pytest.approx(12.0)  # not 13-13
+    assert len(b["passes"]) == 4                                        # 21:00 and 21:05 are one pass
     outside = ~b["final"]
     assert np.isinf(b["upper"][outside]).all() and (b["lower"][outside] == b["t_end"]).all()   # never burned
     assert (b["lower"] <= b["upper"]).all()
@@ -51,65 +86,85 @@ def test_arrival_bounds_from_viirs_and_perimeter():
     assert burning[grid.cell_of(39.72, -120.05)] and not burning[grid.cell_of(39.73, -120.03)]
 
 
-def toy_samples(n=3000, seed=0):
-    """Fire moving 1 km/h downwind and 0.25 km/h upwind; arrival observed in 2 h intervals, far cells censored."""
+def test_weighted_auc():
+    s = np.array([0.1, 0.4, 0.35, 0.8])
+    y = np.array([False, False, True, True])
+    assert weighted_auc(s, y, np.ones(4)) == pytest.approx(0.75)
+    # negative at 0.4 weighs 3: positive 0.35 beats weight 1 of 4, positive 0.8 beats all 4 -> (1 + 4) / (2 * 4)
+    assert weighted_auc(s, y, np.array([1.0, 3.0, 1.0, 1.0])) == pytest.approx(0.625)
+    assert weighted_auc(np.array([1.0, 1.0]), np.array([True, False]), np.ones(2)) == 0.5     # ties count half
+    assert weighted_auc(s, np.zeros(4, bool), np.ones(4)) is None
+
+
+def toy_samples(n=4000, seed=0, starts=2):
+    """Fire moving 1 km/h downwind, 0.25 km/h upwind, stopping at 12 km (beyond: never burns). Path steps are the
+    distance in cells; 2 h observation intervals."""
     rng = np.random.default_rng(seed)
-    df = pd.DataFrame({k: rng.normal(size=n).astype(np.float32) for k in FEATURES})
-    df["dist_front_m"] = rng.uniform(100, 20_000, n)
-    df["wind_along_ms"] = rng.uniform(-5, 5, n)
-    speed_kmh = np.where(df["wind_along_ms"] > 0, 1.0, 0.25)
-    t = df["dist_front_m"] / 1000 / speed_kmh
-    burned = t < 40
+    df = pd.DataFrame({k: np.zeros(n, np.float32) for k in FEATURES})
+    d = rng.uniform(100, 20_000, n)
+    along = rng.uniform(-5, 5, n)
+    df["path_len_m"], df["path_steps"], df["path_wind_along_ms"] = d, d / 100, along
+    t = d / 1000 / np.where(along > 0, 1.0, 0.25)
+    burned = d < 12_000
     df["lower_h"] = np.where(burned, np.maximum(np.floor(t / 2) * 2, survival.MIN_HOURS), 40.0)
     df["upper_h"] = np.where(burned, np.floor(t / 2) * 2 + 2, np.inf)
     df["weight"] = 1.0
-    return df
+    df["euclid_dist_m"], df["ca_burn_prob"] = d, np.exp(-d / 3000)
+    df["start_utc"] = rng.integers(0, starts, n).astype(str)
+    return df, t, burned
 
 
-def test_fit_learns_speed_and_round_trips(tmp_path):
-    df = toy_samples()
-    model = fit(df, sigma=0.5, rounds=150)
+def test_fit_learns_whether_and_when_and_round_trips(tmp_path):
+    df, t, burned = toy_samples()
+    model = fit(df, sigma=0.4, rounds=150)
     X = df[list(FEATURES)].to_numpy(np.float32)
-    med = model.median_hours(X)
-    true_t = df["dist_front_m"] / 1000 / np.where(df["wind_along_ms"] > 0, 1.0, 0.25)
-    ok = true_t < 30
-    assert np.median(np.abs(np.log(med[ok]) - np.log(true_t[ok]))) < 0.5
-    p6, p48 = model.p_within(med, 6), model.p_within(med, 48)
-    assert (p48 >= p6).all() and ((p6 >= 0) & (p48 <= 1)).all()
+    pe, med = model.p_ever(X), model.median_if_burns(X)
+    assert pe[df["path_len_m"] < 8000].mean() > 0.9 and pe[df["path_len_m"] > 16000].mean() < 0.1
+    ok = burned & (t < 30)
+    assert np.median(np.abs(np.log(med[ok]) - np.log(t[ok]))) < 0.4    # when, for cells that burn: not dragged late
+    p6, p48 = model.p_within(pe, med, 6), model.p_within(pe, med, 48)
+    assert (p48 >= p6).all() and (p48 <= pe + 1e-6).all()
     scores = survival.evaluate(model, df)
-    assert scores["auc_12h"] > 0.9 and scores["auc_12h"] >= scores["auc_dist_12h"] - 0.02
+    assert scores["auc_12h"] > 0.9 and scores["auc_ever"] > 0.95 and scores["interval_hit"] > 0.3
+    assert scores["n_known_48h"] > scores["n_pos_48h"]                  # never-burned cells count as negatives
+    assert scores["calibration_24h"]
 
     path = tmp_path / "m.json"
     model.meta = {"trained_utc": "test", "fires": ["toy"]}
     model.save(path)
     again = ArrivalModel.load(path)
-    assert again.sigma == 0.5 and np.allclose(again.median_hours(X[:50]), med[:50])
+    assert again.sigma == 0.4 and np.allclose(again.p_ever(X[:50]), pe[:50])
+    assert np.allclose(again.median_if_burns(X[:50]), med[:50])
     with pytest.raises(FileNotFoundError):
         ArrivalModel.load(tmp_path / "missing.json")
 
 
 @pytest.fixture(scope="module")
 def toy_model():
-    m = fit(toy_samples(), sigma=0.5, rounds=60)
+    m = fit(toy_samples()[0], sigma=0.4, rounds=60)
     m.meta = {"trained_utc": "test", "fires": ["toy"]}
     return m
 
 
 def test_predict_arrival_adds_layers(toy_model):
     res = predict_arrival(spread_probabilities(make_ds(u=5.0)), T0, model=toy_model)
-    assert np.isnan(res["arrival_h"].values[C, C])                      # burning already
+    assert np.isnan(res["arrival_h"].values[C, C]) and np.isnan(res["p_ever"].values[C, C])   # burning already
     assert res["arrival_h"].values[C, C + 4] < res["arrival_h"].values[C, C - 4]   # downwind arrives first
     for h in HORIZONS_H:
         assert f"p_arrive_{h}h" in res and res.attrs[f"arrival_area_{h}h_km2"] >= 0
+    assert (np.nan_to_num(res["p_arrive_48h"].values) <= np.nan_to_num(res["p_ever"].values) + 1e-6).all()
     assert res.attrs["arrival_area_48h_km2"] >= res.attrs["arrival_area_6h_km2"]
-    assert "XGBoost AFT" in res.attrs["arrival_model"]
+    assert "cure-fraction" in res.attrs["arrival_model"]
 
-    water = make_ds(u=5.0)
+    island = make_ds(u=5.0)
     lc = np.full((N, N), 20, np.int16)
-    lc[:, C + 2:] = 80                                                  # a lake east of the fire
-    water["landcover"] = (("y", "x"), lc)
-    res = predict_arrival(spread_probabilities(water), T0, model=toy_model)
-    assert np.isinf(res["arrival_h"].values[C, C + 3]) and res["p_arrive_48h"].values[C, C + 3] == 0
+    lc[:, C + 2] = 80                                                   # water wall: land beyond is unreachable
+    lc[:, 0] = 80                                                       # and a lake cell west
+    island["landcover"] = (("y", "x"), lc)
+    res = predict_arrival(spread_probabilities(island), T0, model=toy_model)
+    for cell in ((C, C + 4), (C, C + 2), (C, 0)):
+        assert res["p_ever"].values[cell] == 0 and np.isinf(res["arrival_h"].values[cell])
+        assert res["p_arrive_48h"].values[cell] == 0
     assert res["p_arrive_48h"].values[C, C - 3] > 0
 
 
@@ -118,12 +173,31 @@ def test_payload_with_and_without_arrival_model(toy_model):
                           arrival_fn=lambda r, t: predict_arrival(r, t, model=toy_model))
     s = out["summary"]
     assert s["arrival"] is True and s["arrival_horizons_h"] == list(HORIZONS_H)
+    assert s["n_cells"] <= s["n_map_cells"] == len(out["cells"]["features"])   # CA count vs squares on the map
     props = out["cells"]["features"][0]["properties"]
-    assert {"p", "t50", "p6", "p12", "p24", "p48"} <= set(props)
+    assert {"p", "pe", "t50", "p6", "p12", "p24", "p48"} <= set(props)
     json.dumps(out, allow_nan=False)
 
     def missing(r, t):
         raise FileNotFoundError("no arrival-time model")
     out = predict_payload({**BODY, "use_nisar": False, "steps": 3}, predict_fn=fake_predict({}), arrival_fn=missing)
     assert out["summary"]["arrival"] is False and "t50" not in out["cells"]["features"][0]["properties"]
+    assert out["summary"]["n_cells"] == out["summary"]["n_map_cells"]
     assert any(n.startswith("arrival times skipped") for n in out["summary"]["notes"])
+
+
+def test_calibration_fixes_overconfidence_and_keeps_order():
+    df, _, _ = toy_samples(seed=1)
+    df.loc[df.sample(frac=0.5, random_state=0).index, ["lower_h", "upper_h"]] = [40.0, np.inf]  # half never burn
+    model = fit(df, sigma=0.4, rounds=60)
+    before = survival.evaluate(model, df)
+    model.calibration = survival.fit_calibration([(model, df)])
+    after = survival.evaluate(model, df)
+    assert after["brier_24h"] < before["brier_24h"]
+    top = after["calibration_24h"][-1]                                  # [bin, predicted, observed, weight]
+    assert abs(top[1] - top[2]) < 0.1
+    X = df[list(FEATURES)].to_numpy(np.float32)
+    probs = model.probabilities(model.p_ever(X), model.median_if_burns(X))
+    for a, b in zip(HORIZONS_H, HORIZONS_H[1:]):
+        assert (probs[a] <= probs[b] + 1e-9).all()
+    assert (probs[HORIZONS_H[-1]] <= probs["ever"] + 1e-9).all()
