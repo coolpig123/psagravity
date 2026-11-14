@@ -61,70 +61,92 @@ start time for all steps, and how many hours a step stands for is not calibrated
 
 ### When: arrival time per cell (survival model)
 
-The CA's steps have no unit of time. [survival.py](src/firespread/survival.py) learns hours from the real fires
-with an XGBoost **accelerated-failure-time** (AFT) model, trained on interval-censored arrival times:
+The CA's steps have no unit of time, and many cells near a fire never burn. [survival.py](src/firespread/survival.py)
+learns hours from the real fires with a **cure-fraction mixture**:
 
 ```
-ln T = f(x) + sigma Z,  Z ~ Normal(0, 1)     T = hours until the fire reaches the cell
-median arrival = exp(f(x)),   P(T <= h) = Phi((ln h - f(x)) / sigma)
+P(T <= h) = pi(x) * Phi((ln h - f(x)) / sigma)
+pi(x) = P(the fire ever reaches the cell)        XGBoost classifier
+f(x)  = ln median arrival, if it does            XGBoost AFT, interval-censored, trained on burned cells only
 ```
+
+then calibrated (isotonic regression) on predictions for fires the model did not train on.
 
 ```python
 from firespread.survival import predict_arrival
-res = predict_arrival(predict(polygon=..., start=...))   # loads src/firespread/models/arrival_aft.json
-res["arrival_h"], res["p_arrive_6h"], res["p_arrive_12h"], res["p_arrive_24h"], res["p_arrive_48h"]
+res = predict_arrival(predict(polygon=..., start=...))   # loads src/firespread/models/arrival_aft*.json
+res["p_ever"], res["arrival_h"], res["p_arrive_6h"], ..., res["p_arrive_48h"]
 ```
+
+**Features: the fastest path.** Dijkstra over the 8-neighbour grid from the burning cells, where crossing from i to j
+costs 1 / p_spread(i -> j) CA steps (the expected wait of a cell that keeps trying with probability p). So:
+- a backing or flanking fire is slow, not extinguished (no die-off as in a one-step-burnout Monte Carlo run);
+- water, rock and built-up are walls the path goes around; cells beyond them are never reached;
+- the source is the fastest burning cell, not the nearest one.
+
+Along the path: its cost, length, total climb, total descent, mean wind along it, mean P_veg. Per-cell weather is
+not a feature (nearly constant at one start hour: with 13 starts the trees used it to recognise the start); wind and
+moisture enter through the path cost. Every feature has a physical sign constraint. The path leaves out the NISAR /
+Sentinel-2 terms, which training has no data for, so the website sees the same features; cells those masks rule out
+are set to never afterwards.
 
 **Labels**, one interval per cell, from `real_fires/data/fires/<fire>/processed/`:
 
 | Cell | Lower bound | Upper bound |
 |---|---|---|
-| detected by VIIRS (within 300 m of a 375 m detection), inside the WFIGS final perimeter | the VIIRS pass before | first detection, or the FEDS perimeter that first contains it if earlier |
+| detected by VIIRS (within 300 m of a 375 m detection), inside the WFIGS final perimeter | the VIIRS pass before the upper bound | first detection, or the FEDS perimeter that first contains it if earlier |
 | inside the final perimeter, never timed by VIIRS | the start | end of growth (99% of detections) |
-| outside the final perimeter | end of growth | never (right-censored) |
+| outside the final perimeter | - | never burns (the classifier's 0 class) |
 
-**Samples:** 2-6 start times per fire, at VIIRS passes while 3-85% of the final area is burned. At each start, the
-detected area (gaps closed) is the burning fire, the CA runs from it, and every other cell is one sample. Inputs are
-from Earth Engine (terrain, land cover, LANDFIRE, RTMA weather at the start), cached in `data/survival/`.
+FEDS gives only upper bounds: its area is a lower bound of the real one (38% for Bug), so being outside a FEDS
+perimeter does not mean unburned.
 
-**Features** (`FEATURES`): distance to the fire, wind speed and its component along / across the path from the
-nearest burning cell, slope along that path, P_veg, P_m, EMC, can-burn, and the CA's own burn probability and
-arrival distance (run until it could travel 12 km). Arrival may only grow with distance and shrink with the CA's burn
-probability (monotone constraints). Time of day and fire area are left out: they are the same for every cell of a
-start, and with 13 starts the trees used them to recognise the start (worse on held-out fires).
+**Samples:** 2-6 start times per fire, at VIIRS passes while 3-85% of the final area is burned. Inputs from Earth
+Engine (terrain, land cover, LANDFIRE, RTMA weather at the start hour), cached in `data/survival/`.
 
 ```bash
 python -m firespread.survival train      # downloads what is missing (~5 min the first time), trains, saves
 python -m firespread.survival evaluate   # prints the report saved with the model
 ```
 
-**Results** (2026-11-14; each training fire scored by a model trained on the other two; Crosswhite never used in
-training). AUC of P(T <= h): does it rank cells that burned within h above cells that did not (0.5 = chance)?
+**Scoring** (`evaluate`): per start time, then averaged, so cells of starts with different remaining growth are
+never ranked against each other; never-burned cells are negatives at every horizon; all scores use the sample
+weights (never-burned cells are subsampled 1 in 4).
 
-| Fire | 6 h: AFT / CA / distance | 12 h | 24 h | 48 h |
-|---|---|---|---|---|
-| Bug (held out) | **0.97** / 0.75 / 0.98 | 0.93 / 0.74 / 0.96 | 0.86 / 0.72 / 0.89 | 0.86 / 0.77 / 0.91 |
-| Colwash (held out) | 0.87 / 0.84 / 0.94 | **0.71** / 0.60 / 0.50 | **0.69** / 0.57 / 0.46 | - |
-| Biscar (held out) | 0.97 / 0.73 / 0.98 | 0.88 / 0.71 / 0.91 | 0.80 / 0.70 / 0.85 | 0.86 / 0.71 / 0.87 |
-| Crosswhite (validation) | 0.97 / 0.78 / 0.98 | 0.97 / 0.76 / 0.98 | 0.95 / 0.79 / 0.96 | **0.92** / 0.78 / 0.91 |
+**Results** (2026-11-15; each training fire scored by a model trained and calibrated on the other two; Crosswhite
+never used). AUC of P(T <= h): model / physics-only path cost / Monte Carlo CA / straight-line distance:
 
-What this says, honestly:
-- It ranks cells much better than the CA's burn probability, everywhere.
-- It is about as good as plain distance to the fire, but not better, except on Colwash (12-24 h) and Crosswhite
-  (48 h). Wind, slope and moisture do not yet add much beyond distance across fires: 3 training fires and 13 start
-  times are very little to learn from.
-- Probabilities: low ones are reliable (< 5% -> almost never burns), high ones are overconfident (cells at > 80%
-  within 6 h burned 40-48% of the time on Bug and Biscar).
-- The median arrival time of cells that did burn is ~3x too late: one AFT distribution has to cover the cells that
-  burn and the ones that never do at the same distance. A cure-fraction model (P(ever burns) x time if it does) would
-  separate them.
-- Colwash: VIIRS timed only 6% of its area (39k acres in under a day, between passes), so most of it only says
-  "burned by the end".
-- No NISAR or Sentinel-2 burn scars in training (the website adds them, which only changes `can_burn`), and the
-  weather is the start hour only.
+| Fire | 6 h | 12 h | 24 h | 48 h | Brier 24 h (raw) |
+|---|---|---|---|---|---|
+| Bug | 0.90 / 0.90 / 0.77 / **0.98** | 0.89 / 0.88 / 0.77 / **0.97** | 0.82 / 0.82 / 0.74 / **0.91** | 0.77 / 0.79 / 0.73 / **0.87** | 0.024 (0.060) |
+| Colwash | 0.84 / 0.84 / 0.84 / **0.90** | 0.75 / **0.76** / 0.66 / 0.68 | 0.74 / **0.75** / 0.66 / 0.68 | 0.73 / **0.76** / 0.72 / 0.70 | 0.007 (0.022) |
+| Biscar | 0.95 / 0.96 / 0.73 / **0.98** | 0.85 / 0.92 / 0.72 / **0.94** | 0.82 / 0.86 / 0.69 / **0.88** | 0.75 / 0.79 / 0.61 / **0.79** | 0.027 (0.040) |
+| Crosswhite | 0.98 / 0.98 / 0.86 / 0.98 | 0.98 / 0.98 / 0.86 / 0.98 | **0.96** / **0.97** / 0.86 / 0.96 | **0.95** / 0.94 / 0.86 / 0.93 | 0.014 (0.096) |
 
-Next: more fires (each new fire in `real_fires` is picked up by `TRAIN_FIRES`), GOES 5-min timing for the labels,
-weather along the next 24 h, and a cure-fraction model.
+What this says:
+- The fastest-path cost alone is as good as or better than the trees on it, and far better than the Monte Carlo CA.
+  It beats straight-line distance on Colwash (12-48 h) and Crosswhite (24-48 h), but not on Bug or Biscar: wind and
+  slope at the start hour do not yet transfer better than distance on those fires.
+- Calibration is what made the probabilities usable: Brier 24 h dropped 2-7x. Before it, cells at "80%+ within
+  24 h" burned 13-45% of the time. After it, Bug's 20-40% bin predicts 32% and observes 28%; Crosswhite is still
+  too high (29% predicted vs 7% observed), Biscar too low (30% vs 37%).
+- Whether a cell ever burns is the hard part (AUC 0.73-0.76 on the training fires, 0.86 on Crosswhite): stalling
+  depends on weather changes and suppression, which no feature has. So every reachable cell keeps some chance.
+- Times for cells that do burn: median within the observed interval for 9-14% of cells on the training fires, typical
+  error a factor 2.5 (Bug, Biscar) to 3.9 (Colwash). The first version (no cure fraction) was off 3.8-12x.
+  Crosswhite is worse (factor 8.5): its lightning fires grew for weeks, slower than the 3 fast training fires.
+- Bug Fire on the website (polygon ~10 km², start 08-09 21:00): 12.5 km² expected within 24 h and 33 km² within
+  48 h; the FEDS perimeters (themselves a lower bound) grew ~27 km² by the next morning. The calibration matches
+  the average fire, so a fast run like this is underestimated.
+
+Not addressed yet (data limits, not code):
+- **Weather is the start hour only.** For a live prediction the next hours would come from GFS forecasts; for
+  training, RTMA hours along the path. Both need a time-dependent path cost.
+- **No NISAR or Sentinel-2 in training** (they are kept out of the features instead, see above).
+- **Three training fires.** More fires (each new fire in `real_fires` is picked up by `TRAIN_FIRES`) and GOES 5-min
+  timing for the labels are the most useful next steps.
+- The expected areas sum chances over the whole grid, so a larger `radius_km` adds small chances from far cells;
+  the cure fraction keeps those small (far cells: chance of ever burning ~0.1, times a small P(T <= h)).
 
 ### Web app
 
