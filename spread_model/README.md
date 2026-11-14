@@ -38,11 +38,32 @@ python -m firespread --inputs ../gee_layers/data/bug_bundle.nc --nisar nisar.nc 
 vegetation_cover and weather (wind, temp_c, rh_pct). It skips Sentinel-2 `vegetation` and gridMET `fuel_dryness`.
 It also adds Sentinel-2 burn scars (below); turn them off with `burn_scars=False` / `--no-burn-scars`.
 
+### Several steps: burn probability (Monte Carlo)
+
+`spread_probabilities()` is one CA step: only the cells touching the fire get a probability.
+[simulate.py](src/firespread/simulate.py) runs the automaton forward the way Alexandridis does:
+
+- each step, every burning cell tries to ignite each neighbour once, with its `p_spread`;
+- then the cell is burned out, and the newly lit cells burn in the next step.
+
+It repeats this in 200 random runs:
+
+```python
+from firespread import predict
+from firespread.simulate import simulate_spread
+sim = simulate_spread(predict(polygon=..., start=...), steps=30)
+sim["burn_prob"]      # (y, x): share of runs in which the cell burned within 30 steps
+sim["arrival_step"]   # (y, x): mean step at which it caught fire
+```
+
+One step moves the fire at most one cell, so 30 steps at 100 m reach at most 3 km. The weather is held at the
+start time for all steps, and how many hours a step stands for is not calibrated yet.
+
 ### Web app
 
 [web.py](src/firespread/web.py) turns a request from the map UI (`{polygon, start, radius_km, res_m, use_nisar,
-burn_scars}`) into a prediction and a JSON answer: the cells with `ignition_prob > 0.01` as GeoJSON squares plus a
-summary. [backend/server.py](../backend/server.py) serves it as `POST /api/predict`; how to start the website and
+burn_scars, steps = 30}`) into a prediction and a JSON answer. The map gets the cells with `burn_prob > 0.01`
+(from the simulation above) as GeoJSON squares, plus a summary. [backend/server.py](../backend/server.py) serves it as `POST /api/predict`; how to start the website and
 the server is in [frontend/README.md](../frontend/README.md).
 
 ### Burn scars from Sentinel-2 (dNBR)

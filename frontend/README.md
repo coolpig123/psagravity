@@ -37,8 +37,9 @@ Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\se
 3. Press **Predict** (enabled for polygons up to 400 km²).
 
 The server (`POST /api/predict`) fetches only the area of the polygon + 5 km from Earth Engine (terrain, land
-cover, weather, Sentinel-2 burn scars) and NISAR (ASF), runs the spread model, and the map shows the cells next
-to the fire coloured by their chance of catching fire in the next model step (yellow -> orange -> red). Under the
+cover, weather, Sentinel-2 burn scars) and NISAR (ASF), runs the spread model forward 30 steps (one step = at most one
+100 m cell, so up to ~3 km), and the map zooms to the result and colours each cell by its chance of burning
+within those steps (yellow -> orange -> red). Under the
 map: the most likely spread direction, the expected new burned area, and the weather time, NISAR passes and
 Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction.
 
