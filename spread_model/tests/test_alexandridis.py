@@ -5,8 +5,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from firespread import (AlexandridisParams, p_den, p_dry, p_mask, p_slope, p_veg, p_wind, predict,
-                        slope_angle_deg, spread_probabilities, summary)
+from firespread import (AlexandridisParams, NisarRequest, nisar_template, p_den, p_dry, p_emc, p_mask,
+                        p_moisture, p_slope, p_veg, p_wind, predict, simard_emc, slope_angle_deg,
+                        spread_probabilities, summary)
 from firespread.alexandridis import DIR_NAMES, shift
 
 P = AlexandridisParams()
@@ -15,9 +16,10 @@ C = N // 2
 
 
 def make_ds(n=N, res=100.0, elev=None, u=0.0, v=0.0, lifeform=2, cover=45.0, landcover=20, burning=None,
-            nisar_cover=None, nisar_sm=None):
+            nisar_cover=None, nisar_sm=None, temp=None, rh=None):
     """Synthetic geelayers-like Dataset: shrub, flat, calm, centre cell burning, no NISAR unless given.
-    `cover` is LANDFIRE cover_pct, which the model must ignore (density comes from NISAR only)."""
+    `cover` is LANDFIRE cover_pct, which the model must ignore (density comes from NISAR only).
+    temp / rh (hourly weather) only added when given, so P_emc is neutral by default."""
     shape = (n, n)
     if burning is None:
         burning = np.zeros(shape, np.int16)
@@ -38,6 +40,10 @@ def make_ds(n=N, res=100.0, elev=None, u=0.0, v=0.0, lifeform=2, cover=45.0, lan
         ds["nisar_cover_pct"] = (("y", "x"), full(nisar_cover))
     if nisar_sm is not None:
         ds["nisar_soil_moisture"] = (("y", "x"), full(nisar_sm))
+    if temp is not None:
+        ds["temp_c"] = (("time", "y", "x"), np.full((1, *shape), temp, np.float32))
+    if rh is not None:
+        ds["rh_pct"] = (("time", "y", "x"), np.full((1, *shape), rh, np.float32))
     return ds
 
 
@@ -103,6 +109,67 @@ def test_p_dry_from_nisar_only():
     assert dry.tolist()[0] == pytest.approx([0.3, 0.0, 0.0, -0.3, 0.0])
 
 
+def test_simard_emc_three_regimes():
+    t_c = 30.0
+    tf = t_c * 1.8 + 32                                       # 86 F
+    for h, expected in [(5, 0.03229 + 0.281073 * 5 - 0.000578 * 5 * tf),
+                        (30, 2.22749 + 0.160107 * 30 - 0.014784 * tf),
+                        (70, 21.0606 + 0.005565 * 70 ** 2 - 0.00035 * 70 * tf - 0.483199 * 70)]:
+        assert simard_emc(t_c, h) == pytest.approx(expected)
+    # regime boundaries: 10 and 50 belong to the upper piece
+    assert simard_emc(t_c, 10) == pytest.approx(2.22749 + 0.160107 * 10 - 0.014784 * tf)
+    assert simard_emc(t_c, 50) == pytest.approx(21.0606 + 0.005565 * 2500 - 0.00035 * 50 * tf - 0.483199 * 50)
+    # wetter air -> higher EMC; RH clipped to [0, 100]; never negative; NaN passes through
+    emc = simard_emc(np.full(5, 25.0), np.array([5, 20, 40, 60, 95]))
+    assert (np.diff(emc) > 0).all()
+    assert simard_emc(t_c, 120) == pytest.approx(simard_emc(t_c, 100))
+    assert simard_emc(45.0, 0) >= 0
+    assert np.isnan(simard_emc(np.nan, 30))
+
+
+def test_p_emc_direction_and_neutral_defaults():
+    hot_dry = make_ds(temp=35, rh=12)
+    cool_wet = make_ds(temp=12, rh=85)
+    f_hot, emc_hot, _ = p_emc(hot_dry.isel(time=0), P)
+    f_cool, emc_cool, _ = p_emc(cool_wet.isel(time=0), P)
+    assert emc_hot[0, 0] < P.emc_ref_pct < emc_cool[0, 0]
+    assert f_hot[0, 0] > 1 > f_cool[0, 0]
+    assert f_hot[0, 0] == pytest.approx(math.exp(-P.b_emc * (float(emc_hot[0, 0]) - P.emc_ref_pct)), rel=1e-5)
+    # no weather -> neutral; NaN cells -> neutral
+    f, emc, src = p_emc(make_ds().isel(time=0), P)
+    assert (f == 1).all() and np.isnan(emc).all() and "not in inputs" in src
+    ds = hot_dry.isel(time=0)
+    ds["rh_pct"].values[0, 0] = np.nan
+    f, _, src = p_emc(ds, P)
+    assert f[0, 0] == 1 and f[1, 1] > 1 and "1 cells without weather" in src
+
+
+def test_hot_dry_air_spreads_more_than_cool_humid():
+    hot = spread_probabilities(make_ds(temp=35, rh=12))
+    cool = spread_probabilities(make_ds(temp=12, rh=85))
+    assert float(hot["p_m"][0, 0]) > 1 > float(cool["p_m"][0, 0])
+    assert float(hot["ignition_prob"].sum()) > float(cool["ignition_prob"].sum())
+    assert float(hot["ignition_prob"][C - 1, C]) > float(cool["ignition_prob"][C - 1, C])
+
+
+def test_p_m_combines_emc_and_nisar_soil_moisture():
+    base = make_ds(temp=30, rh=25)
+    f_emc, emc, _ = p_emc(base.isel(time=0), P)
+    for sm, p_dry_expected in [(0.05, 0.3), (0.18, 0.0), (0.30, -0.3)]:
+        ds = make_ds(temp=30, rh=25, nisar_sm=sm)
+        p_m, parts, src = p_moisture(ds.isel(time=0), P)
+        assert np.allclose(parts["p_dry"], p_dry_expected)
+        assert np.allclose(p_m, f_emc * (1 + p_dry_expected))
+        assert "Simard" in src and "nisar_soil_moisture" in src
+    # same through predict(): NISAR passed separately, both parts in the output
+    ds = make_ds(temp=30, rh=25)
+    res = predict(inputs=ds, nisar=nisar_on(ds, nisar_soil_moisture=np.full((N, N), 0.05, np.float32)))
+    assert float(res["p_m"][0, 0]) == pytest.approx(float(f_emc[0, 0]) * 1.3, rel=1e-5)
+    assert float(res["p_emc"][0, 0]) == pytest.approx(float(f_emc[0, 0]), rel=1e-5)
+    assert float(res["emc_pct"][0, 0]) == pytest.approx(float(emc[0, 0]), rel=1e-5)
+    assert "Moisture P_m" in summary(res)
+
+
 def test_p_mask():
     burning = np.array([[1, 0, 0, 0, 0]], bool)
     ds = xr.Dataset({"fuel_lifeform": (("y", "x"), np.array([[2, 2, 0, 2, 2]], np.int16)),
@@ -131,7 +198,9 @@ def test_flat_calm_reference_fuel_is_p0_with_diagonal_correction():
     assert ign.sum() == pytest.approx(4 * P.p0 + 4 * P.p0 / math.sqrt(2))   # only the 8 neighbours
     assert ign[C, C] == 0                                    # the burning cell itself
     assert res.attrs["direction_strength"] == pytest.approx(0, abs=1e-6)
-    assert "not provided" in res.attrs["source_p_den"] and "not provided" in res.attrs["source_p_dry"]
+    assert "not provided" in res.attrs["source_p_den"]
+    assert "nisar_soil_moisture not provided" in res.attrs["source_p_m"]
+    assert "temp_c / rh_pct not in inputs" in res.attrs["source_p_m"]
     # diagonal_factor = 1 reproduces the published model
     res = spread_probabilities(make_ds(), params=AlexandridisParams(diagonal_factor=1.0))
     assert neighbours(res, "NE") == pytest.approx(P.p0)
@@ -237,6 +306,38 @@ def test_nisar_aligned_by_coordinates_not_index():
     assert "regridded" in res.attrs["nisar_alignment"]
     inner = res["p_dry"].values[1:-1, 1:-1]
     assert np.allclose(inner, 0.3)                           # dry everywhere NISAR covers
+
+
+def test_nisar_provider_and_template(tmp_path):
+    """The NISAR module can plug in as a function: it gets the grid / area / time and fills a template."""
+    ds = make_ds().assign_coords(lat=(("y", "x"), np.full((N, N), 39.7)), lon=(("y", "x"), np.full((N, N), -120.0)))
+    ds.attrs["time_utc"] = "2026-08-09T21:00:00+00:00"
+    seen = {}
+
+    def get_nisar(request: NisarRequest):              # what the teammates' module would expose
+        seen["request"] = request
+        out = nisar_template(request)
+        out["nisar_soil_moisture"] = (("y", "x"), np.full((len(request.y), len(request.x)), 0.05, np.float32))
+        burned = np.zeros((len(request.y), len(request.x)), np.int16)
+        burned[C - 1, C] = 1
+        out["nisar_burned"] = (("y", "x"), burned)
+        return out
+
+    res = predict(inputs=ds, nisar=get_nisar)
+    req = seen["request"]
+    assert req.crs == "EPSG:32610" and req.res_m == 100 and req.time_utc.startswith("2026-08-09T21")
+    w, s, e, n = req.bbox_lonlat
+    assert w < -120.0 < e and s < 39.7 < n
+    assert res.attrs["nisar_alignment"] == "same grid"
+    assert float(res["p_dry"][0, 0]) == pytest.approx(0.3) and float(res["ignition_prob"][C - 1, C]) == 0
+    # provider with nothing for this place / time -> neutral, recorded
+    res = predict(inputs=ds, nisar=lambda request: None)
+    assert res.attrs["nisar_alignment"] == "provider returned no NISAR data" and float(res["p_dry"].max()) == 0
+    # a NetCDF file written from the template works too
+    path = tmp_path / "nisar.nc"
+    get_nisar(NisarRequest.from_inputs(ds)).to_netcdf(path, engine="h5netcdf")
+    res = predict(inputs=ds, nisar=path)
+    assert float(res["p_dry"][0, 0]) == pytest.approx(0.3)
 
 
 def test_nisar_bad_inputs_rejected():
