@@ -29,6 +29,17 @@ html, body, #root { margin: 0; height: 100%; }
   cursor: default;
 }
 
+.area {
+  margin-left: auto;
+  font: 14px system-ui, sans-serif;
+  padding: 4px 12px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.area.ok { color: #2a9d3f; }
+.area.too-big { color: #d62828; }
+
 .map {
   width: 800px;
   height: 500px;
