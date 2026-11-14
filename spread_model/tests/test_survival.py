@@ -25,8 +25,6 @@ def test_cell_features_geometry():
     assert f["wind_cross_ms"][C - 3, C] == pytest.approx(5.0)            # north of the fire: wind blows across
     assert f["slope_path_deg"][C, C + 3] > 0 > f["slope_path_deg"][C, C - 3]   # uphill east, downhill west
     assert f["ca_burn_prob"][C, C + 1] > f["ca_burn_prob"][C, C - 1]      # downwind burns more often
-    assert np.all(f["fire_area_km2"] == pytest.approx(0.01))
-    assert np.all(np.abs(f["solar_hour_sin"] ** 2 + f["solar_hour_cos"] ** 2 - 1) < 1e-5)
 
 
 def test_arrival_bounds_from_viirs_and_perimeter():

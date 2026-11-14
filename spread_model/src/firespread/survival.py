@@ -60,8 +60,11 @@ HORIZONS_H = (6, 12, 24, 48)
 REACH_M = 12_000.0       # the feature CA runs until it could have travelled this far (one cell per step)
 FEATURE_RUNS = 100       # Monte Carlo runs of the feature CA
 FEATURES = ("dist_front_m", "ca_arrival_m", "ca_burn_prob", "wind_speed_ms", "wind_along_ms", "wind_cross_ms",
-            "slope_path_deg", "p_veg", "p_m", "emc_pct", "can_burn", "fire_area_km2",
-            "solar_hour_sin", "solar_hour_cos")
+            "slope_path_deg", "p_veg", "p_m", "emc_pct", "can_burn")
+# Not used: features that are the same for every cell of a start (time of day, fire area). With ~13 start times
+# in total the trees used them to recognise the start instead of learning spread (worse on held-out fires).
+# Arrival can only get later with distance and earlier with the CA's burn chance.
+MONOTONE = {"dist_front_m": 1, "ca_burn_prob": -1}
 
 # labels / samples
 RES_M = 100.0             # same cell size as the website
@@ -77,15 +80,8 @@ MIN_HOURS = 0.05           # AFT needs lower bounds > 0
 
 # ---- features ---------------------------------------------------------------------------------
 
-def _solar_hour(result: xr.Dataset, time_utc) -> np.ndarray:
-    t = pd.Timestamp(time_utc)
-    t = t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
-    lon = result["lon"].values if "lon" in result.coords else np.zeros((result.sizes["y"], result.sizes["x"]))
-    return (t.hour + t.minute / 60 + lon / 15.0) % 24
-
-
-def cell_features(result: xr.Dataset, time_utc) -> dict[str, np.ndarray]:
-    """Per-cell features (y, x) from a spread_probabilities() result at the start time `time_utc`.
+def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
+    """Per-cell features (y, x) from a spread_probabilities() result (the weather in it is the start time's).
 
     Geometry is measured from the nearest burning cell: distance, the wind component along / across that path,
     and the mean slope along it. The CA runs forward until it could reach REACH_M (ca_burn_prob, and the mean
@@ -107,8 +103,6 @@ def cell_features(result: xr.Dataset, time_utc) -> dict[str, np.ndarray]:
 
     steps = max(1, min(int(math.ceil(REACH_M / res)), 2 * (h + w)))
     sim = simulate_spread(result, steps=steps, runs=FEATURE_RUNS, seed=0)
-    hour = _solar_hour(result, time_utc)
-    area = float(burning.sum()) * res * res / 1e6
     f = {
         "dist_front_m": dist,
         "ca_arrival_m": sim["arrival_step"].values * res,
@@ -121,9 +115,6 @@ def cell_features(result: xr.Dataset, time_utc) -> dict[str, np.ndarray]:
         "p_m": result["p_m"].values,
         "emc_pct": result["emc_pct"].values,
         "can_burn": (result["mask_reason"].values == 0).astype(np.float32),
-        "fire_area_km2": np.full((h, w), area),
-        "solar_hour_sin": np.sin(2 * np.pi * hour / 24),
-        "solar_hour_cos": np.cos(2 * np.pi * hour / 24),
     }
     return {k: np.asarray(f[k], np.float32) for k in FEATURES}
 
@@ -183,11 +174,9 @@ def load_model(path: Path = MODEL_PATH) -> ArrivalModel:
 
 def predict_arrival(result: xr.Dataset, time_utc=None, model: ArrivalModel | None = None) -> xr.Dataset:
     """Add arrival_h (median hours until the fire reaches the cell) and p_arrive_<h>h (chance it does within
-    h hours, h in HORIZONS_H) to a spread_probabilities() / simulate_spread() result. Burning cells -> NaN."""
+    h hours, h in HORIZONS_H) to a spread_probabilities() / simulate_spread() result. Burning cells -> NaN.
+    `time_utc` (the start) is not a feature: the weather already in `result` is the start time's."""
     model = model or load_model()
-    time_utc = time_utc or result.attrs.get("time_utc")
-    if time_utc is None:
-        raise ValueError("time_utc is needed (the start time of the prediction)")
     burning = result["burning"].values.astype(bool)
     feats = cell_features(result, time_utc)
     median = model.median_hours(feature_matrix(feats)).reshape(burning.shape).astype(np.float32)
@@ -378,9 +367,12 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
         s0 = _sec(t0)
         lo = (bounds["lower"] - s0) / 3600
         hi = (bounds["upper"] - s0) / 3600
-        uncertain = (lo < 0) & (hi > 0)              # may or may not have burned already at t0: no label
+        # Inside the final perimeter, not burning at t0, but never timed by VIIRS (lower = ignition < t0): it burned
+        # between t0 and its upper bound. Dropping these cells instead (half of Bug, 94% of Colwash) leaves mostly
+        # never-burned cells near the fire, and the model then predicts arrival 3-10x too late.
+        lo = np.where(bounds["final"] & (lo < 0), 0.0, lo)
         censored = ~np.isfinite(hi)
-        keep = ~burning & ~uncertain & (hi > 0)
+        keep = ~burning & (hi > 0)
         keep &= ~censored | (rng.random(keep.shape) < CENSORED_KEEP)
         df = pd.DataFrame(feature_matrix(feats, keep), columns=list(FEATURES))
         df["lower_h"] = np.maximum(lo[keep], MIN_HOURS)
@@ -399,8 +391,9 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
 # ---- training and evaluation ------------------------------------------------------------------
 
 PARAMS = {"objective": "survival:aft", "eval_metric": "aft-nloglik", "aft_loss_distribution": "normal",
-          "tree_method": "hist", "learning_rate": 0.05, "max_depth": 5, "min_child_weight": 50,
-          "subsample": 0.8, "colsample_bytree": 0.8, "seed": 0}
+          "tree_method": "hist", "learning_rate": 0.05, "max_depth": 3, "min_child_weight": 500,
+          "subsample": 0.8, "colsample_bytree": 0.8, "seed": 0,
+          "monotone_constraints": "(" + ",".join(str(MONOTONE.get(f, 0)) for f in FEATURES) + ")"}
 ROUNDS = 400
 SIGMAS = (0.6, 1.0, 1.5)
 
