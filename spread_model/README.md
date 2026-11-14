@@ -250,3 +250,61 @@ Next steps:
 - learn the parameters from the four real fires;
 - run many CA steps with hourly weather and compare whole perimeters;
 - connect the NISAR provider.
+
+## First calibration on real fires (2026-11-14)
+
+Code: [calibrate.py](src/firespread/calibrate.py).
+
+```
+python -m firespread.calibrate fetch bug_fire colwash biscar
+python -m firespread.calibrate fit --train bug_fire --test colwash biscar crosswhite
+```
+
+The fetch caches the inputs in `data/calibration/`, which is not committed.
+
+**Setup:**
+- **Examples:** each one is a 12 h (or 24 h) FEDS segment. The model starts from the perimeter at t0 and predicts
+  the perimeter at t1. Segments where the fire grew less than 0.5 km² are skipped.
+- **Data:**
+  - 7 Bug Fire segments to train on.
+  - 7 segments on 3 other fires to test on: Colwash (1), Biscar (2) and the first 4 of Crosswhite.
+- **Inputs:**
+  - Earth Engine only, at 400 m;
+  - weather at 21 UTC (14:00 local, the afternoon peak) inside each segment;
+  - no NISAR and no Sentinel-2.
+- **Fire front:** spread starts only from cells where VIIRS saw fire in the 12 h before t0. The rest of the
+  perimeter counts as burned out.
+- **Fitted by grid search:** `p0`, a wind multiplier on `c1` and `c2`, and the number of CA steps per 12 h (the
+  first measured time unit). Slope and moisture keep the paper values.
+- **Score:** soft IoU on the **new burned area only**: P(burned) outside the start perimeter compared with the
+  growth seen by FEDS. A "no growth" forecast scores 0 on it.
+
+**Result:** mean growth IoU per segment.
+
+| | Train (Bug Fire, 7) | Test (3 other fires, 7) |
+|---|---|---|
+| No growth | 0.000 | 0.000 |
+| Paper `p0` and wind (steps per 12 h fitted: 2) | 0.060 | 0.101 |
+| **Fitted:** `p0` 0.8, wind ×0.5, 2 steps per 12 h | **0.066** | **0.112** |
+
+**What we learned:**
+1. **Time unit:** at 400 m, the best fit is **2 CA steps per 12 h** (one step ≈ 6 h, at most 0.4 km per step).
+   More steps spread the fire around the whole front and add false alarms faster than they add hits.
+2. **Spreading from the VIIRS-active cells, not the whole perimeter, helps:** test growth IoU rose from 0.095 to
+   0.107 with the same weather. Most of a big fire's edge is not burning.
+3. **The skill is still low (about 11% of the new area), and the figure shows why.** The Bug Fire's big run on
+   08-09/10 grew by **spotting**: the new areas (blue) lie 1–3 km downwind (east) and are not connected to the
+   start perimeter (black). A neighbour-to-neighbour automaton cannot jump. The fitted wind multiplier (×0.5) is a
+   symptom: stronger wind pushes P(burned) further along the edge it touches, but the real growth appears
+   elsewhere.
+
+   ![Bug Fire 08-09 20:30 -> 08-10 09:30](docs/calibration_bug_fire_aug9.png)
+4. **Some parameters lie at the edge of the grid** (`p0` = 0.8, the highest value tried), so the search should
+   be widened before these values are trusted.
+
+**Next:**
+- Add **spotting**: a random jump of 0.5–3 km downwind, more likely in strong wind and dry air.
+- Give each step a duration from the rate of spread (Rothermel), with hourly weather.
+- Fit on all 4 fires: train on 3, test on the 4th, rotating.
+- Score arrival times against GOES and VIIRS.
+- Compare with and without NISAR.
