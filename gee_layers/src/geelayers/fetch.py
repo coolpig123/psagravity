@@ -16,6 +16,7 @@ from .grid import Grid
 
 NODATA = -9999.0              # what masked pixels are filled with before download; becomes NaN
 MAX_BYTES = 32 * 2**20        # per request, below the 48 MB hard limit
+MAX_CELLS = 16_000_000        # per grid (4000 x 4000 = 400 km square at 100 m); guards against huge drawn areas
 BYTES_PER_PX = 4              # float32
 
 
@@ -56,7 +57,15 @@ def plan(n_bands: int, max_bytes: int = MAX_BYTES) -> tuple[int, int]:
 
 def download(image: ee.Image, grid: Grid, bands: list[str], workers: int = 8,
              max_bytes: int = MAX_BYTES) -> np.ndarray:
-    """Pixels of `bands` of `image` on `grid`, as float32 (n_bands, height, width); masked = NaN."""
+    """Pixels of `bands` of `image` on `grid`, as float32 (n_bands, height, width); masked = NaN.
+
+    Only the grid's cells are computed and downloaded, never the whole dataset.
+    """
+    if grid.width * grid.height > MAX_CELLS:
+        km_w, km_h = grid.width * grid.res / 1000, grid.height * grid.res / 1000
+        raise ValueError(f"area too large: {grid.width} x {grid.height} cells ({km_w:.0f} x {km_h:.0f} km at "
+                         f"{grid.res:g} m) > {MAX_CELLS:,} cells. Draw a smaller area, reduce the buffer, or use "
+                         "coarser cells (res_m).")
     image = _prepare(image)
     out = np.full((len(bands), grid.height, grid.width), np.nan, np.float32)
     per_request, side = plan(len(bands), max_bytes)

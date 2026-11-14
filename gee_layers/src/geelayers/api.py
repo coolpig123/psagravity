@@ -21,6 +21,7 @@ from .auth import init
 from .derive import decode_evc, slope_aspect, wind_speed_dir
 from .grid import Grid
 from .layers import LAYERS, VARIABLES, WEATHER
+from .perimeter import resolve_perimeter
 
 DEFAULT_LAYERS = ("terrain", "landcover", "vegetation_cover", "vegetation", "fuel_dryness", "weather")
 
@@ -166,6 +167,92 @@ def regrid(ds: xr.Dataset, grid: Grid) -> xr.Dataset:
         out[v] = out[v].astype(np.float32)
     out.attrs.update({"res_m": grid.res, "transform": list(grid.transform)})
     return _add_wind(out) if "wind_u_ms" in out else out
+
+
+def get_fire_inputs(
+    grid: Grid | None = None,
+    start=None,
+    end=None,
+    *,
+    hours: float = 24.0,
+    polygon=None,
+    point: tuple[float, float] | None = None,
+    ignition_radius_m: float = 0.0,
+    bbox: tuple[float, float, float, float] | None = None,
+    radius_km: float = 15.0,
+    res_m: float = 100.0,
+    weather_res_m: float = 1000.0,
+    step_hours: int = 1,
+    layers: Iterable[str] = DEFAULT_LAYERS,
+    weather_source: str = "rtma",
+    issued=None,
+    perimeter_time_key: str | None = None,
+) -> xr.Dataset:
+    """One aligned Dataset for a spread run: layers at `start`, `initial_burned` mask, hourly weather.
+
+    The fire (exactly one): `polygon` = the area burning at `start` (list of (lon, lat), GeoJSON
+    dict / string / file, or anything with __geo_interface__, e.g. a shape drawn in the UI), or
+    `point=(lat, lon)` = an ignition, optionally with `ignition_radius_m`.
+    Several untimed features are all burning (merged). A perimeter time series (every feature has a
+    time property, e.g. real_fires FEDS 12 h perimeters) gives the last perimeter observed at or
+    before `start` (see perimeter.resolve_perimeter); which one is recorded in attrs.
+
+    The area fetched is only the fire plus `radius_km` around it (or `grid` / `bbox` if given):
+    nothing outside that box is downloaded from Earth Engine.
+    """
+    if start is None:
+        raise ValueError("start time is required (e.g. start='2026-08-08T22:30Z')")
+    if (polygon is None) == (point is None):
+        raise ValueError("give exactly one fire: polygon=... (area burning at start) or point=(lat, lon) (ignition)")
+    t_start = _utc(start)
+    t_end = _utc(end) if end is not None else t_start + pd.Timedelta(hours=hours)
+    if t_end <= t_start:
+        raise ValueError(f"end ({t_end}) must be after start ({t_start})")
+
+    perimeter_meta: dict[str, str] = {}
+    if polygon is not None:
+        polygon, perimeter_meta = resolve_perimeter(polygon, t_start, perimeter_time_key)
+
+    if grid is None:
+        if bbox is not None:
+            grid = Grid.from_bbox(*bbox, res_m=res_m)
+        elif polygon is not None:
+            grid = Grid.from_polygon(polygon, buffer_km=radius_km, res_m=res_m)
+        else:
+            grid = Grid.from_point(point[0], point[1], radius_km=radius_km, res_m=res_m)
+
+    if polygon is not None:
+        mask = grid.polygon_mask(polygon)
+    else:
+        mask = grid.point_mask(point[0], point[1], radius_m=ignition_radius_m)
+    if not mask.any():
+        raise ValueError("the fire is outside the grid: no burning cell. Check lon/lat order ([lon, lat] in GeoJSON) "
+                         "or the grid / bbox.")
+
+    req_layers = list(layers)
+    want_weather = "weather" in req_layers
+    env_layers = [l for l in req_layers if l != "weather"]
+
+    ds = get_layers(grid, time=t_start, layers=env_layers, weather_source=weather_source) if env_layers else _empty_dataset(grid)
+    ds.attrs["time_utc"] = t_start.isoformat()
+    ds.attrs["end_utc"] = t_end.isoformat()
+    ds.attrs.update(perimeter_meta)
+    ds["initial_burned"] = (("y", "x"), mask, _attrs("initial_burned"))
+
+    if want_weather:
+        wx_grid = grid.with_resolution(weather_res_m) if weather_res_m and weather_res_m != grid.res else grid
+        # Start at the top of the hour so the first weather step covers `start` (22:00 for a 22:30 start).
+        # That hour is observed before `start`, so nothing from the future leaks in. GFS keeps the run
+        # issued at or before `start` itself.
+        wx = get_weather(wx_grid, t_start.floor("h"), t_end, source=weather_source, step_hours=step_hours,
+                         issued=issued if issued is not None else t_start)
+        if wx_grid != grid:
+            wx = regrid(wx, grid)
+        ds = ds.assign_coords(time=wx.coords["time"])
+        for v in wx.data_vars:
+            ds[v] = wx[v]
+        ds.attrs.update({k: v for k, v in wx.attrs.items() if k.startswith(("weather_", "gfs_"))})
+    return ds
 
 
 def describe() -> str:
