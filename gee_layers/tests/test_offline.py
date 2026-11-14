@@ -290,3 +290,76 @@ def test_init_without_project_explains(monkeypatch):
     monkeypatch.setattr(auth, "_initialized", False)
     with pytest.raises(RuntimeError, match="EE_PROJECT"):
         auth.init()
+
+
+def test_in_conus_and_weather_candidates():
+    from geelayers.api import _weather_candidates, in_conus
+    g_us = Grid.from_point(*BUG, radius_km=10, res_m=100)
+    g_spain = Grid.from_point(40.6, -4.7, radius_km=10, res_m=100)
+    g_aus = Grid.from_point(-33.9, 151.2, radius_km=10, res_m=100)
+    g_ak = Grid.from_point(64.8, -147.7, radius_km=10, res_m=100)
+    assert in_conus(g_us)
+    assert not in_conus(g_spain) and not in_conus(g_aus) and not in_conus(g_ak)
+
+    now = pd.Timestamp("2026-11-14T12:00Z")
+    # Historical US: tries rtma first, then era5_land, then gfs
+    assert _weather_candidates(g_us, pd.Timestamp("2026-08-08T00:00Z"), pd.Timestamp("2026-08-09T00:00Z"),
+                               "rtma", now=now) == ["rtma", "era5_land", "gfs"]
+    # Historical non-US (Spain): skips rtma, tries era5_land then gfs
+    assert _weather_candidates(g_spain, pd.Timestamp("2026-08-08T00:00Z"), pd.Timestamp("2026-08-09T00:00Z"),
+                               "rtma", now=now) == ["era5_land", "gfs"]
+    # Recent / live non-US: tries gfs first, then era5_land
+    assert _weather_candidates(g_spain, pd.Timestamp("2026-11-13T00:00Z"), pd.Timestamp("2026-11-14T00:00Z"),
+                               "auto", now=now) == ["gfs", "era5_land"]
+    # Future forecast in US: rtma has no future hours, so gfs first
+    assert _weather_candidates(g_us, pd.Timestamp("2026-11-14T12:00Z"), pd.Timestamp("2026-11-15T12:00Z"),
+                               "rtma", now=now) == ["gfs", "era5_land"]
+    # Explicit global source is respected
+    assert _weather_candidates(g_us, pd.Timestamp("2026-08-08T00:00Z"), pd.Timestamp("2026-08-09T00:00Z"),
+                               "era5_land", now=now) == ["era5_land"]
+
+
+def test_global_layers_and_weather_fallback_outside_conus(monkeypatch):
+    from geelayers import api, layers
+
+    monkeypatch.setattr(api, "init", lambda: None)
+    monkeypatch.setattr(fetch, "region", lambda grid: None)
+
+    g_spain = Grid.from_point(40.6, -4.7, radius_km=2, res_m=500)
+
+    # CONUS-only builders must not be called for Spain
+    def fail_conus(region, t):
+        pytest.fail("CONUS-only layer should be skipped outside CONUS")
+
+    monkeypatch.setitem(layers.LAYERS, "vegetation_cover",
+                        layers.Layer("vegetation_cover", "", "LANDFIRE", "CONUS", 30, False, True, ("evc",), fail_conus))
+    monkeypatch.setitem(layers.LAYERS, "fuel_dryness",
+                        layers.Layer("fuel_dryness", "", "GRIDMET", "CONUS", 4000, True, False, ("fm100_pct",), fail_conus))
+    monkeypatch.setitem(layers.LAYERS, "terrain",
+                        layers.Layer("terrain", "", "NASADEM", "global", 30, False, False,
+                                     ("elevation_m",), lambda r, t: (_FakeImg(), {})))
+    monkeypatch.setitem(layers.LAYERS, "landcover",
+                        layers.Layer("landcover", "", "WorldCover", "global", 10, False, True,
+                                     ("landcover",), lambda r, t: (_FakeImg(), {})))
+
+    monkeypatch.setattr(api.ee.Image, "cat", staticmethod(lambda imgs: _FakeImg()))
+    monkeypatch.setattr(fetch, "download",
+                        lambda img, grid, names: np.stack([
+                            np.full(grid.shape, 500.0 if n == "elevation_m" else 10.0, np.float32) for n in names
+                        ]))
+
+    ds = api.get_layers(g_spain, time="2026-08-08T22:30Z",
+                        layers=("terrain", "landcover", "vegetation_cover", "fuel_dryness"))
+    assert (ds["evc"].values == -1).all()
+    assert (ds["fuel_lifeform"].values == -1).all()
+    assert np.isnan(ds["cover_pct"].values).all()
+    assert np.isnan(ds["fm100_pct"].values).all()
+    assert (ds["landcover"].values == 10).all()
+    assert "skipped: outside CONUS" in ds.attrs["dataset_vegetation_cover"]
+    assert "skipped: outside CONUS" in ds.attrs["dataset_fuel_dryness"]
+
+
+class _FakeImg:
+    def select(self, bands):
+        return self
+

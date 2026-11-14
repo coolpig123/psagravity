@@ -24,11 +24,39 @@ from .layers import LAYERS, VARIABLES, WEATHER
 from .perimeter import resolve_perimeter
 
 DEFAULT_LAYERS = ("terrain", "landcover", "vegetation_cover", "vegetation", "fuel_dryness", "weather")
+CONUS_BBOX = (-125.0, 24.0, -66.0, 50.0)   # west, south, east, north (contiguous US)
+ERA5_LATENCY = pd.Timedelta(days=6)         # ERA5-Land reanalysis lags real time by ~5-6 days
 
 
 def _utc(t) -> pd.Timestamp:
     t = pd.Timestamp(t)
     return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def in_conus(grid: Grid) -> bool:
+    """True if `grid` overlaps the contiguous United States bounding box."""
+    w, s, e, n = grid.bbox_lonlat()
+    cw, cs, ce, cn = CONUS_BBOX
+    return e > cw and w < ce and n > cs and s < cn
+
+
+def _weather_candidates(grid: Grid, start: pd.Timestamp, end: pd.Timestamp, source: str,
+                        now: pd.Timestamp | None = None) -> list[str]:
+    """Ordered weather sources to try.
+
+    When `source` is "auto" or "rtma", falls back to global sources (`era5_land` for historical
+    windows older than ERA5_LATENCY, `gfs` for recent / forecast windows) whenever outside CONUS
+    or when RTMA has no coverage for the requested time/location.
+    """
+    if source not in WEATHER and source != "auto":
+        raise ValueError(f"unknown weather source {source!r}; choose from {list(WEATHER) + ['auto']}")
+    if source not in ("auto", "rtma"):
+        return [source]
+    now_utc = _utc(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    global_order = ["era5_land", "gfs"] if end <= now_utc - ERA5_LATENCY else ["gfs", "era5_land"]
+    if in_conus(grid) and end <= now_utc:
+        return ["rtma", *global_order]
+    return global_order
 
 
 def _empty_dataset(grid: Grid) -> xr.Dataset:
@@ -58,26 +86,43 @@ def get_weather(grid: Grid, start, end, source: str = "rtma", step_hours: int = 
                 issued=None) -> xr.Dataset:
     """Hourly weather on `grid` for valid times in [start, end), dims (time, y, x).
 
-    source: "rtma" (US, observed analysis, best for hindcasts), "era5_land" (global reanalysis,
-    a few days behind), "gfs" (forecast: use for live predictions; `issued` picks the run,
-    default = latest run at or before `start`).
+    source: "rtma" (US, observed analysis, best for hindcasts; auto-falls back outside CONUS),
+    "era5_land" (global reanalysis, a few days behind), "gfs" (forecast: use for live predictions;
+    `issued` picks the run, default = latest run at or before `start`), or "auto".
     Weather is smooth, so a coarse grid is enough and much faster: get_weather(grid.with_resolution(1000), ...),
     then regrid(weather, grid) to put it on the model grid.
     """
     init()
-    if source not in WEATHER:
-        raise ValueError(f"unknown weather source {source!r}; choose from {list(WEATHER)}")
-    src = WEATHER[source]
     start, end = _utc(start), _utc(end)
-    col, meta = src.collection(fetch.region(grid), start, end, issued)
-    if step_hours > 1:
-        wanted = pd.date_range(start.ceil("h"), end, freq=f"{step_hours}h", inclusive="left")
-        col = col.filter(ee.Filter.inList("valid_time", [int(t.timestamp() * 1000) for t in wanted]))
-    col = ee.ImageCollection(col.distinct("valid_time")).sort("valid_time")   # distinct() returns a FeatureCollection
-    times_ms = col.aggregate_array("valid_time").getInfo()
-    if not times_ms:
-        raise LookupError(f"{source}: no weather between {start} and {end} here. The dataset may not reach this "
-                          f"date yet ({src.description}) or not cover this area ({src.coverage}).")
+    candidates = _weather_candidates(grid, start, end, source)
+    reg = fetch.region(grid)
+    chosen = None
+    times_ms: list[int] = []
+    col = None
+    meta: dict[str, str] = {}
+    last_err: Exception | None = None
+    for cand in candidates:
+        src = WEATHER[cand]
+        try:
+            c, m = src.collection(reg, start, end, issued)
+            if step_hours > 1:
+                wanted = pd.date_range(start.ceil("h"), end, freq=f"{step_hours}h", inclusive="left")
+                c = c.filter(ee.Filter.inList("valid_time", [int(t.timestamp() * 1000) for t in wanted]))
+            c = ee.ImageCollection(c.distinct("valid_time")).sort("valid_time")
+            t_ms = c.aggregate_array("valid_time").getInfo()
+        except LookupError as exc:
+            last_err = exc
+            continue
+        if t_ms:
+            chosen, col, meta, times_ms = cand, c, m, t_ms
+            break
+    if chosen is None or col is None:
+        if last_err is not None and len(candidates) == 1:
+            raise last_err
+        tried = ", ".join(f"{c} ({WEATHER[c].coverage})" for c in candidates)
+        raise LookupError(f"{source}: no weather between {start} and {end} here (tried {tried}).")
+
+    src = WEATHER[chosen]
     names = [f"t{i}_{v}" for i in range(len(times_ms)) for v in src.variables]
     stack = col.toBands().rename(names)
     arr = fetch.download(stack, grid, names).reshape(len(times_ms), len(src.variables), *grid.shape)
@@ -87,7 +132,9 @@ def get_weather(grid: Grid, start, end, source: str = "rtma", step_hours: int = 
     for k, v in enumerate(src.variables):
         ds[v] = (("time", "y", "x"), arr[:, k], _attrs(v))
     ds = _add_wind(ds)
-    ds.attrs.update({"weather_source": source, "weather_dataset": src.dataset, **meta})
+    ds.attrs.update({"weather_source": chosen, "weather_dataset": src.dataset, **meta})
+    if chosen != source and source != "auto":
+        ds.attrs["weather_source_requested"] = source
     return ds
 
 
@@ -98,7 +145,8 @@ def get_layers(grid: Grid, time=None, layers: Iterable[str] = DEFAULT_LAYERS,
     `time` is the moment the prediction starts (e.g. the ignition time). Time-dependent layers
     only use data from before it: vegetation = 30 days before, fuel_dryness = latest day before,
     weather = latest hour at or before `time`. Static layers (terrain, landcover, vegetation_cover)
-    don't need a time.
+    don't need a time. CONUS-only layers (`vegetation_cover`, `fuel_dryness`) are skipped cleanly
+    with NaN / -1 placeholders when `grid` is outside the US.
     """
     init()
     layers = list(layers)
@@ -113,12 +161,22 @@ def get_layers(grid: Grid, time=None, layers: Iterable[str] = DEFAULT_LAYERS,
     if t is not None:
         ds.attrs["time_utc"] = t.isoformat()
     region = fetch.region(grid)
-    images, names, categorical = [], [], set()
+    conus = in_conus(grid)
+    images, names, categorical, skipped = [], [], set(), []
     for name in layers:
         if name == "weather":
             continue
         layer = LAYERS[name]
-        img, meta = layer.build(region, t)
+        if layer.coverage == "CONUS" and not conus:
+            skipped.append((name, layer, "outside CONUS"))
+            continue
+        try:
+            img, meta = layer.build(region, t)
+        except LookupError:
+            if layer.coverage == "CONUS":
+                skipped.append((name, layer, "no CONUS data at location"))
+                continue
+            raise
         images.append(img.select(list(layer.variables)))
         names += layer.variables
         if layer.categorical:
@@ -133,6 +191,13 @@ def get_layers(grid: Grid, time=None, layers: Iterable[str] = DEFAULT_LAYERS,
                 ds[v] = (("y", "x"), np.where(np.isnan(arr[k]), -1, np.round(arr[k])).astype(np.int16), _attrs(v))
             else:
                 ds[v] = (("y", "x"), arr[k], _attrs(v))
+    for name, layer, reason in skipped:
+        for v in layer.variables:
+            if layer.categorical:
+                ds[v] = (("y", "x"), np.full(grid.shape, -1, np.int16), _attrs(v))
+            else:
+                ds[v] = (("y", "x"), np.full(grid.shape, np.nan, np.float32), _attrs(v))
+        ds.attrs[f"dataset_{name}"] = f"{layer.dataset} (skipped: {reason})"
     if "evc" in ds:
         lifeform, cover = decode_evc(ds["evc"].values)
         ds["fuel_lifeform"] = (("y", "x"), lifeform, _attrs("fuel_lifeform"))
