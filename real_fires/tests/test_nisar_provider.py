@@ -225,6 +225,23 @@ def test_remote_parallel_chunks_match_h5py_and_are_cached(tmp_path, monkeypatch)
     assert np.allclose(again["HVHV"], direct["HVHV"], equal_nan=True, rtol=1e-6)
 
 
+def test_dataset_missing_from_older_granule_is_no_data(tmp_path, monkeypatch):
+    """Older SME2 versions lack some datasets (seen over Haifa): that variable is NaN, the rest still reads."""
+    g = model_grid()
+    tg = na.TargetGrid.from_request(Request(g))
+    path = write_sme2(tmp_path / "sme2.h5", g, sm=0.15, flag=0)
+    with h5py.File(path, "a") as f:
+        del f[na.SME2_GROUP + "/algorithmCandidates/PMI/vegetationWaterContentRetrieved"]
+    remote = LocalAsRemote()
+    monkeypatch.setattr(na, "_remote", lambda url: (remote, url, None))
+    for i, source in enumerate((path, "remote://" + str(path))):    # local and remote readers
+        out = na.read_layers(source, na.SME2_GROUP, npv.SME2_DATASETS, tg, prepare=npv._sme2_valid,
+                             cache_dir=tmp_path / f"c{i}", cache_key="old")
+        assert np.isnan(out["vwc"]).all()
+        assert np.allclose(out["soil_moisture"], 0.15)
+    assert remote.opens == 1                                          # the remote reader really ran
+
+
 def test_stalled_remote_read_is_retried(tmp_path, monkeypatch):
     g = model_grid()
     tg = na.TargetGrid.from_request(Request(g))
