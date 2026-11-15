@@ -5,6 +5,8 @@ import { join } from 'node:path'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // GitHub Pages serves the site under /<repo>/: the workflow sets BASE_PATH. Locally it stays at /.
+  base: process.env.BASE_PATH ?? '/',
   // Don't run Babel on pre-bundled dependencies in the cache folder.
   plugins: [react({ exclude: [/\/node_modules\//, /psagravity-vite/] })],
   // Keep Vite's cache out of OneDrive, which locks files while syncing.

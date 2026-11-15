@@ -1,0 +1,58 @@
+# Publish master on GitHub Pages: https://coolpig123.github.io/psagravity/
+#   /                -> frontend/ (the map website; Predict and wind need the Python server, so they only work locally)
+#   /fire-explorer/  -> real_fires/app/ (the study fires timeline, fully static)
+# One-time setup: repo Settings -> Pages -> Source: "GitHub Actions".
+name: GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the website
+        working-directory: frontend
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_NO_SERVER: '1'
+        run: |
+          npm ci
+          npm run build
+      - name: Assemble the site
+        run: |
+          mkdir -p site
+          cp -r frontend/dist/. site/
+          cp -r real_fires/app site/fire-explorer
+          touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

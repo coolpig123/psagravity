@@ -28,6 +28,16 @@ const MAX_AREA_KM2 = 400 // above this the area is shown in red
 const DEFAULT_START = '2026-08-09T21:00Z' // Bug Fire, first afternoon: easy to test with
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
 
+// Where the Python server is: same origin by default (Vite proxy in npm run dev). The GitHub Pages build has no
+// server (VITE_NO_SERVER=1), unless VITE_API_BASE points to one that is reachable from the browser.
+const API_BASE: string = import.meta.env.VITE_API_BASE ?? ''
+const NO_SERVER = import.meta.env.VITE_NO_SERVER === '1' && !API_BASE
+const NO_SERVER_MESSAGE = 'This online version has no Python server: run the app locally to use it (see frontend/README.md)'
+const api = (path: string, init: RequestInit) => {
+  if (NO_SERVER) throw new Error(NO_SERVER_MESSAGE)
+  return fetch(API_BASE + path, init)
+}
+
 // Answer of POST /api/predict (spread_model/src/firespread/web.py).
 type WeatherTimelineStep = {
   time_utc: string
@@ -204,7 +214,7 @@ function App() {
 
     map.on('load', () => {
       // Where get_fire_inputs has full data (green) or not (red); built by backend/make_regions.py.
-      map.addSource('regions', { type: 'geojson', data: '/regions.geojson' })
+      map.addSource('regions', { type: 'geojson', data: `${import.meta.env.BASE_URL}regions.geojson` })
       map.addLayer({
         id: 'regions-fill',
         type: 'fill',
@@ -394,7 +404,7 @@ function App() {
     clearTimeout(windTimer.current) // a newer request replaces one not sent yet (typing a start time)
     windTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch('/api/wind', {
+        const res = await api('/api/wind', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ bbox: box, start: t }),
@@ -485,8 +495,9 @@ function App() {
       properties: { area_km2: area },
       geometry: { type: 'Polygon', coordinates: [[...points, points[0]]] },
     }
+    if (NO_SERVER) return // nothing to send it to
     try {
-      const res = await fetch('/api/polygon', {
+      const res = await api('/api/polygon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(feature),
@@ -506,7 +517,7 @@ ${err instanceof Error ? err.message : err}`)
     setError('')
     setPredicting(true)
     try {
-      const res = await fetch('/api/predict', {
+      const res = await api('/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
