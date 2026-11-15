@@ -3,7 +3,10 @@
 spread_probabilities() gives, for one step, P(burning cell -> each of its 8 neighbours) (`p_spread`). Here the
 automaton is run `steps` times in `runs` independent random realisations, as in Alexandridis et al. (2008):
 
+  - at step 0 only the active front burns (result["active_front"], e.g. VIIRS hotspots; default the whole burned
+    area); the rest of the burned area is burned out;
   - a burning cell tries to ignite each neighbour once, with probability p_spread[direction, cell];
+  - with spotting, a burning cell may also throw a firebrand downwind (p_spot_launch, spot_dist_m, spot_dir_deg);
   - a cell burns for one step, then is burned out (it cannot spread again or be re-ignited);
   - newly ignited cells are the burning cells of the next step.
 
@@ -26,13 +29,25 @@ DEFAULT_RUNS = 200
 
 
 def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = DEFAULT_RUNS,
-                    seed: int | None = 0, spotting: bool = True) -> xr.Dataset:
-    """Add burn_prob and arrival_step (y, x) to a spread_probabilities() result. Deterministic for a fixed seed."""
+                    seed: int | None = 0, spotting: bool = True, front: np.ndarray | None = None) -> xr.Dataset:
+    """Add burn_prob and arrival_step (y, x) to a spread_probabilities() result. Deterministic for a fixed seed.
+
+    front: the cells burning at step 0 (the active front, e.g. VIIRS); default result["active_front"] if present,
+    else all of result["burning"]. The rest of the burned area is burned out: it never spreads nor re-burns.
+    An empty front falls back to the whole burned area."""
     if steps < 1 or runs < 1:
         raise ValueError("steps and runs must be >= 1")
     p = np.nan_to_num(result["p_spread"].values.astype(np.float32))
     start = result["burning"].values.astype(bool)
     h, w = start.shape
+    if front is None and "active_front" in result:
+        front = result["active_front"].values
+    front = start if front is None else np.asarray(front).astype(bool)
+    if front.shape != start.shape:
+        raise ValueError(f"front has shape {front.shape}, the grid is {start.shape}")
+    if not front.any():
+        front = start
+    start = start | front
     res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
     rng = np.random.default_rng(seed)
 
@@ -48,7 +63,7 @@ def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = 
         spot_cone_deg = float(result.attrs.get("spot_cone_deg", 15.0))
 
     burned = np.broadcast_to(start, (runs, h, w)).copy()
-    front_r, front_y, front_x = np.nonzero(burned)            # burning cells (run, row, col)
+    front_r, front_y, front_x = np.nonzero(np.broadcast_to(front, (runs, h, w)))   # burning cells (run, row, col)
     hits = np.zeros((h, w), np.int32)
     step_sum = np.zeros((h, w), np.int64)
     for step in range(1, steps + 1):
@@ -94,6 +109,7 @@ def simulate_spread(result: xr.Dataset, steps: int = DEFAULT_STEPS, runs: int = 
     lit = hits > 0
     reached_edge = lit[0].any() or lit[-1].any() or lit[:, 0].any() or lit[:, -1].any()
     out.attrs.update({"sim_steps": steps, "sim_runs": runs, "sim_spotting": int(bool(spotting)),
+                      "sim_front_cells": int(front.sum()),
                       "sim_expected_area_km2": float(hits.sum() / runs) * res * res / 1e6,
                       "sim_reached_grid_edge": int(reached_edge)})
     return out
