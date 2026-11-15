@@ -80,6 +80,9 @@ class AlexandridisParams:
     vwc_high: float = -0.2        # VWC at or above vwc_high_from_kg_m2: well-watered live canopy
     vwc_low_below_kg_m2: float = 0.5
     vwc_high_from_kg_m2: float = 4.0
+    # Precipitation wetting and wind-gust boost (used when hourly weather includes precip_mm / gust_ms)
+    c_precip: float = 0.15        # 1/mm: rainfall damps P_m via exp(-c_precip * precip_mm)
+    gust_weight: float = 0.25     # fraction of wind-gust excess above sustained wind added to effective wind
     # diagonal neighbours are sqrt(2) cells away: same per-step probability would make flat, calm fires
     # advance sqrt(2) faster along diagonals. 1/sqrt(2) equalises the expected advance per step;
     # 1.0 reproduces the paper.
@@ -132,12 +135,21 @@ def p_den(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
 
 
 def p_dry(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
-    """P_dry per cell from NISAR soil moisture only: dry / normal / wet. No NISAR -> 0 (neutral)."""
-    if "nisar_soil_moisture" not in ds:
-        return np.zeros((ds.sizes["y"], ds.sizes["x"]), np.float32), "nisar_soil_moisture not provided -> 0 (neutral)"
-    out, n_nan = _classes(ds["nisar_soil_moisture"].values.astype(np.float32), params.dry_below_m3m3,
-                          params.wet_from_m3m3, params.dry_dry, params.dry_normal, params.dry_wet)
-    return out, "nisar_soil_moisture" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
+    """P_dry per cell from NISAR soil moisture (or Meteomatics/weather soil_moisture when NISAR is absent):
+    dry / normal / wet. No soil moisture -> 0 (neutral)."""
+    if "nisar_soil_moisture" in ds:
+        da = ds["nisar_soil_moisture"]
+        vals = (da.isel(time=0) if "time" in da.dims else da).values.astype(np.float32)
+        out, n_nan = _classes(vals, params.dry_below_m3m3,
+                              params.wet_from_m3m3, params.dry_dry, params.dry_normal, params.dry_wet)
+        return out, "nisar_soil_moisture" + (f"; {n_nan} cells without NISAR data -> 0" if n_nan else "")
+    if "soil_moisture" in ds:
+        da = ds["soil_moisture"]
+        vals = (da.isel(time=0) if "time" in da.dims else da).values.astype(np.float32)
+        out, n_nan = _classes(vals, params.dry_below_m3m3,
+                              params.wet_from_m3m3, params.dry_dry, params.dry_normal, params.dry_wet)
+        return out, "soil_moisture (weather)" + (f"; {n_nan} cells without soil_moisture -> 0" if n_nan else "")
+    return np.zeros((ds.sizes["y"], ds.sizes["x"]), np.float32), "nisar_soil_moisture not provided -> 0 (neutral)"
 
 
 def simard_emc(temp_c, rh_pct) -> np.ndarray:
@@ -185,16 +197,24 @@ def p_vwc(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, str]:
 
 
 def p_moisture(ds: xr.Dataset, params: AlexandridisParams) -> tuple[np.ndarray, dict[str, np.ndarray], str]:
-    """P_m = P_emc * (1 + P_dry) * (1 + P_vwc): fast air moisture (GEE hourly) x slow ground and vegetation
-    moisture (NISAR).
+    """P_m = P_emc * (1 + P_dry) * (1 + P_vwc) * P_precip: fast air moisture (hourly weather) x slow ground
+    and vegetation moisture (NISAR / Meteomatics) x active rainfall damping.
 
     Returns (P_m, components {"emc_pct", "p_emc", "p_dry", "p_vwc"}, source).
     """
     emc_factor, emc, emc_src = p_emc(ds, params)
     dry, dry_src = p_dry(ds, params)
     vwc, vwc_src = p_vwc(ds, params)
-    return (emc_factor * (1 + dry) * (1 + vwc), {"emc_pct": emc, "p_emc": emc_factor, "p_dry": dry, "p_vwc": vwc},
-            f"{emc_src}; P_dry: {dry_src}; P_vwc: {vwc_src}")
+    pm = emc_factor * (1 + dry) * (1 + vwc)
+    src = f"{emc_src}; P_dry: {dry_src}; P_vwc: {vwc_src}"
+    if "precip_mm" in ds and params.c_precip > 0:
+        da_pr = ds["precip_mm"]
+        raw_pr = (da_pr.isel(time=0) if "time" in da_pr.dims else da_pr).values.astype(np.float32)
+        precip = np.clip(np.nan_to_num(raw_pr, nan=0.0), 0.0, 50.0)
+        if (precip > 0).any():
+            pm = (pm * np.exp(-params.c_precip * precip)).astype(np.float32)
+            src += "; P_precip: exp(-c_precip * precip_mm)"
+    return (pm.astype(np.float32), {"emc_pct": emc, "p_emc": emc_factor, "p_dry": dry, "p_vwc": vwc}, src)
 
 
 # Why a cell cannot catch fire (result variable mask_reason); the first reason that applies is kept.
@@ -291,9 +311,30 @@ def _compass(bearing: float) -> str:
 
 # ---- the model ------------------------------------------------------------------------------
 
+def _effective_wind(snap: xr.Dataset, shape: tuple[int, int], params: AlexandridisParams) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return (u, v, source_note) incorporating wind gusts if present."""
+    if "wind_u_ms" not in snap or "wind_v_ms" not in snap:
+        z = np.zeros(shape, np.float32)
+        return z, z, "no wind in inputs -> P_wind = 1"
+    u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
+    v = np.nan_to_num(snap["wind_v_ms"].values.astype(np.float32))
+    src = "wind_u_ms, wind_v_ms at the burning cell"
+    if "gust_ms" in snap and params.gust_weight > 0:
+        gust = np.nan_to_num(snap["gust_ms"].values.astype(np.float32), nan=0.0)
+        speed = np.hypot(u, v)
+        excess = np.maximum(0.0, gust - speed)
+        if (excess > 0).any():
+            scale = np.where(speed > 1e-3, 1.0 + params.gust_weight * (excess / np.maximum(speed, 1e-3)), 1.0)
+            u = (u * scale).astype(np.float32)
+            v = (v * scale).astype(np.float32)
+            src += f" + gust_ms (weight={params.gust_weight:g})"
+    return u, v, src
+
+
 def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time=None,
                          params: AlexandridisParams | None = None) -> xr.Dataset:
-    """Spread probability from every burning cell to each of its 8 neighbours, for one CA step.
+    """Spread probability from every burning cell to each of its 8 neighbours, for one CA step
+    (plus full time-developing forecast series `p_spread_time` when `ds` has multiple weather hours).
 
     ds:      inputs on one grid (geelayers.get_fire_inputs output, + optional NISAR variables).
     burning: bool/int (y, x) mask of burning cells; default ds["initial_burned"].
@@ -303,6 +344,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
       p_veg, p_den, p_m, p_mask (y, x)            factors of the cell that would catch fire
       emc_pct, p_emc, p_dry, p_vwc (y, x)         the parts of p_m (p_m = p_emc * (1 + p_dry) * (1 + p_vwc))
       p_wind, p_slope, p_spread (direction, y, x) for the burning cell at (y, x) spreading toward `direction`
+      p_spread_time (time, direction, y, x)       time-developing spread probabilities across forecasted weather hours
       ignition_prob (y, x)                        chance each unburned cell catches fire in the next step
       wind_u_ms, wind_v_ms, elevation_m (y, x)    the wind (at `time`) and terrain used
     and attrs summarising the most likely spread direction.
@@ -324,13 +366,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     moist, moist_parts, moist_src = p_moisture(snap, params)
     reason, mask_src = mask_reasons(snap, burning)
     mask = (reason == 0).astype(np.float32)
-    if "wind_u_ms" in snap and "wind_v_ms" in snap:
-        u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
-        v = np.nan_to_num(snap["wind_v_ms"].values.astype(np.float32))
-        wind_src = "wind_u_ms, wind_v_ms at the burning cell"
-    else:
-        u = v = np.zeros(shape, np.float32)
-        wind_src = "no wind in inputs -> P_wind = 1"
+    u, v, wind_src = _effective_wind(snap, shape, params)
     if "elevation_m" in snap:
         elev = snap["elevation_m"].values.astype(np.float32)
         slope_src = "elevation_m difference to the neighbour"
@@ -339,7 +375,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         slope_src = "no elevation in inputs -> P_slope = 1"
 
     # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_m P_mask
-    target_factor = params.p0 * (1 + veg) * (1 + den) * moist * mask
+    base_fuel_mask = params.p0 * (1 + veg) * (1 + den) * mask
+    target_factor = base_fuel_mask * moist
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)
@@ -391,8 +428,51 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     out["mask_reason"].attrs["description"] = "why the cell cannot catch fire: " + "; ".join(
         f"{i} = {r}" for i, r in enumerate(MASK_REASONS))
     weather_time = (str(pd.Timestamp(snap["time"].values)) if "time" in snap.coords else "")
+
+    # Compute time-developing spread probabilities across forecasted weather hours if present
+    if "time" in ds.dims and ds.sizes["time"] > 1:
+        used_t = pd.Timestamp(snap["time"].values)
+        ds_seq = ds.sel(time=slice(used_t, None))
+        if ds_seq.sizes["time"] < 2:
+            ds_seq = ds
+        n_t = ds_seq.sizes["time"]
+        p_time = np.empty((n_t, n, *shape), np.float32)
+        ws_time = np.empty(n_t, np.float32)
+        wd_time = np.empty(n_t, np.float32)
+        tc_time = np.full(n_t, np.nan, np.float32)
+        rh_time = np.full(n_t, np.nan, np.float32)
+        for t_idx in range(n_t):
+            step_ds = ds_seq.isel(time=t_idx)
+            moist_t, _, _ = p_moisture(step_ds, params)
+            u_t, v_t, _ = _effective_wind(step_ds, shape, params)
+            tf_t = base_fuel_mask * moist_t
+            for k, (_, dr, dc, bearing) in enumerate(DIRECTIONS):
+                diagonal = dr != 0 and dc != 0
+                pw_tk = p_wind(u_t, v_t, bearing, params)
+                p_time[t_idx, k] = (shift(tf_t, dr, dc, 0.0) * pw_tk * ps[k]
+                                    * (params.diagonal_factor if diagonal else 1.0))
+            np.clip(p_time[t_idx], 0.0, 1.0, out=p_time[t_idx])
+            u_mean = float(np.nanmean(u_t)) if np.isfinite(u_t).any() else 0.0
+            v_mean = float(np.nanmean(v_t)) if np.isfinite(v_t).any() else 0.0
+            ws_time[t_idx] = float(np.hypot(u_mean, v_mean))
+            wd_time[t_idx] = float((np.degrees(np.arctan2(-u_mean, -v_mean)) + 360.0) % 360.0) if ws_time[t_idx] > 0 else 0.0
+            if "temp_c" in step_ds and np.isfinite(step_ds["temp_c"].values).any():
+                tc_time[t_idx] = float(np.nanmean(step_ds["temp_c"].values))
+            if "rh_pct" in step_ds and np.isfinite(step_ds["rh_pct"].values).any():
+                rh_time[t_idx] = float(np.nanmean(step_ds["rh_pct"].values))
+        out = out.assign_coords(time=ds_seq.coords["time"])
+        out["p_spread_time"] = (("time", "direction", "y", "x"), p_time)
+        out["p_spread_time"].attrs["description"] = (
+            "Time-developing directional spread probability across forecast weather steps"
+        )
+        out["wind_speed_time_ms"] = (("time",), ws_time)
+        out["wind_dir_time_deg"] = (("time",), wd_time)
+        out["temp_time_c"] = (("time",), tc_time)
+        out["rh_time_pct"] = (("time",), rh_time)
+
     out.attrs.update({
-        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter", "weather_source")
+        **{k: ds.attrs[k] for k in ("crs", "res_m", "transform", "time_utc", "initial_perimeter",
+                                    "weather_source", "weather_dataset")
            if k in ds.attrs},
         **{k: v for k, v in ds.attrs.items() if k.startswith(("s2_", "nisar_"))},
         "model":"Alexandridis et al. 2008 + moisture: P = P0 (1+P_veg)(1+P_den) P_w P_s P_m P_mask D; "
@@ -400,7 +480,13 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
                  "D = 1/sqrt(2) diagonal",
         "params": repr(params),
         "weather_time_utc": weather_time,
+        "weather_steps": int(out.sizes.get("time", 1)),
         "weather_note": time_note,
+        **(
+            {"fosberg_fwi_mean": float(np.nanmean(snap["fosberg_fwi"].values))}
+            if "fosberg_fwi" in snap and np.isfinite(snap["fosberg_fwi"].values).any()
+            else {}
+        ),
         "source_p_veg": veg_src, "source_p_den": den_src, "source_p_m": moist_src, "source_p_mask": mask_src,
         "source_p_wind": wind_src, "source_p_slope": slope_src,
         "main_direction_deg": main_bearing, "main_direction": _compass(main_bearing),

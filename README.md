@@ -61,7 +61,7 @@ cp .env.example .env                                        # FIRMS_MAP_KEY (+ E
 ### איפה מה נמצא
 | נתיב | מה |
 |---|---|
-| `real_fires/src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
+| `real_fires/src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `merra2` (רוח ומזג אוויר מ-MERRA-2: `python -m firedata.merra2 fire bug_fire`), `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
 | `real_fires/scripts/build_ground_truth.py` | מריץ את כל ה-pipeline לשריפה אחת |
 | `real_fires/data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
 | `real_fires/docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
@@ -253,11 +253,20 @@ Crosswhite fires, with arrival times, perimeters, metrics and a multi-fire site.
 
 Progress is tracked in the GitHub project **psagravity tasks**.
 
+## Online version
+
+The `master` branch is published on GitHub Pages ([.github/workflows/pages.yml](.github/workflows/pages.yml)):
+
+- **Website:** https://coolpig123.github.io/psagravity/ (map, drawing, regions; Predict and the wind need the Python
+  server, so they only work when the app runs locally)
+- **Fire explorer (all study fires, timeline):** https://coolpig123.github.io/psagravity/fire-explorer/
+
 ## Repository structure
 
 ```
 psagravity/
 ├── README.md, CLAUDE.md
+├── .github/workflows/     # pages.yml: publishes master on GitHub Pages
 ├── docs/                  # project figures (architecture.png)
 ├── gee_layers/            # model inputs from Google Earth Engine: terrain, fuels, dryness, weather (see its README)
 ├── spread_model/          # Alexandridis CA: spread probability per cell + most likely direction (see its README)
