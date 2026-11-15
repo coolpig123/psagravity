@@ -171,3 +171,23 @@ from 5,757 scans (Aug 8-27; 3 scans missing in the bucket).
   medium-probability (low-probability excluded); some fire pixels have no FRP
   (`n_without_frp`). GOES pixel locations are not terrain-corrected.
 - Basemap tiles: Esri World Shaded Relief.
+
+## Bug Fire NISAR threshold (issue #7)
+
+`scripts/nisar_threshold_calibration.py`: same-track GCOV pairs A34 07-22 → 08-15, D42 07-23 → 08-16,
+A106 07-27 → 08-20; HV change averaged over 3 × 3 cells of 100 m; burned where HV dropped ≥ threshold; scored vs
+the WFIGS final perimeter (`processed/nisar_threshold_calibration.csv`).
+
+| HV drop ≥ | Mean cover % | Mean precision % | Mean IoU % | Mean false alarms % |
+|---|---|---|---|---|
+| **0.25 dB** | 70.9 | 80.6 | **58.5** | 9.8 |
+| 0.5 dB | 55.4 | 86.5 | 48.8 | 5.4 |
+| 0.75 dB | 42.4 | 89.2 | 38.7 | 3.4 |
+| 1.0 dB | 32.1 | 91.0 | 30.1 | 2.2 |
+| 1.5 dB | 17.4 | 92.7 | 16.7 | 1.0 |
+
+AUC of the HV drop (threshold-free): A34 0.85, D42 0.91, A106 0.92. Median HV change inside the perimeter
+-0.87 / -0.54 / -0.44 dB (outside +0.04 / +0.23 / +0.14 dB). Chosen: **0.25 dB** (best mean IoU). It is the lowest
+value tested, so the optimum may be lower. A34 has many more false alarms (25 %) than D42 / A106 (2–2.5 %).
+Applied unchanged to the Bald Range fire (BC): see `../bald_range/README.md`. `nisar_provider.SCAR_DROP_DB`
+(1.5 dB, spread-model inputs) is not changed here.
