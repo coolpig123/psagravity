@@ -3,7 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
-import { covers, legendGradient, LEGEND_MAX_MS, sampleWind, viewBox, WindLayer, type WindGrid } from './wind'
+import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
@@ -161,7 +161,9 @@ function App() {
   const [wind, setWind] = useState<WindGrid | null>(null)
   const [windStatus, setWindStatus] = useState<WindStatus>({ state: 'idle' })
   const windRequest = useRef(0) // same as requestId, for the wind
-  const windShown = useRef<{ grid: WindGrid; start: string } | null>(null) // the wind on the map and its start time
+  // The last wind request (on its way, answered or failed): its start time and the area it covers.
+  const windAsked = useRef<{ start: string; box: [number, number, number, number] } | null>(null)
+  const windTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [viewTick, setViewTick] = useState(0) // +1 after each pan / zoom, so the wind can follow the view
 
   useEffect(() => {
@@ -344,15 +346,17 @@ function App() {
   }, [prediction, loaded])
 
   // Once the polygon is finished, fetch the MERRA-2 wind over the whole visible map for the start time (zoomed far
-  // out: a 30 x 20 deg area around the polygon). After a
-  // pan or zoom, fetch again only if the view leaves the area already loaded (the old wind stays meanwhile);
-  // a new start time always fetches again. Drawing again or clearing removes it.
+  // out: a 30 x 20 deg area around the polygon). After a pan or zoom, fetch again only if the view leaves the area
+  // of the last request (answered, on its way or failed), so map resizes and small moves never start a new
+  // request; the old wind stays meanwhile. A new start time always fetches again. Drawing again or clearing
+  // removes it.
   useEffect(() => {
     const map = mapRef.current
     const t = start.trim()
     if (mode !== 'locked' || !t || !map || !loaded) {
       windRequest.current++
-      windShown.current = null
+      clearTimeout(windTimer.current)
+      windAsked.current = null
       setWind(null)
       setWindStatus({ state: 'idle' })
       return
@@ -363,11 +367,13 @@ function App() {
       pts.reduce((a, q) => a + q[1], 0) / pts.length,
     ]
     const box = viewBox(map, middle)
-    const shown = windShown.current
-    if (shown && shown.start === t && covers(shown.grid, box)) return
+    const asked = windAsked.current
+    if (asked && asked.start === t && boxCovers(asked.box, box)) return
     const id = ++windRequest.current
-    if (!shown || shown.start !== t) setWindStatus({ state: 'loading' })
-    const timer = setTimeout(async () => {
+    windAsked.current = { start: t, box: tileBox(box) }
+    if (!asked || asked.start !== t) setWindStatus({ state: 'loading' })
+    clearTimeout(windTimer.current) // a newer request replaces one not sent yet (typing a start time)
+    windTimer.current = setTimeout(async () => {
       try {
         const res = await fetch('/api/wind', {
           method: 'POST',
@@ -378,20 +384,19 @@ function App() {
         const data = await res.json().catch(() => null)
         if (res.status === 404 && data?.no_data)
           throw new Error('no MERRA-2 data for this start time yet (published 2-6 weeks after each month)')
-        if (res.status === 404) throw new Error('the Python server is older than the website: restart npm run dev')
+        // A server started before the website was updated: no /api/wind (404) or the older version (polygon).
+        if (res.status === 404 || (res.status === 400 && /polygon/.test(data?.error ?? '')))
+          throw new Error('the Python server is older than the website: stop npm run dev (Ctrl+C) and start it again')
         if (!res.ok) throw new Error(data?.error ?? `the server answered ${res.status}`)
         if (id !== windRequest.current) return
-        windShown.current = { grid: data as WindGrid, start: t }
         setWind(data as WindGrid)
         setWindStatus({ state: 'ok' })
       } catch (err) {
         if (id !== windRequest.current) return
-        windShown.current = null
         setWind(null)
         setWindStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
       }
     }, 400)
-    return () => clearTimeout(timer)
   }, [mode, start, viewTick, loaded])
 
   useEffect(() => {
@@ -545,7 +550,11 @@ ${err instanceof Error ? err.message : err}`)
           <label className="regions wind">
             <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
             {windStatus.state === 'loading' && 'wind (loading MERRA-2…)'}
-            {windStatus.state === 'error' && <span className="wind-error">wind: {windStatus.message}</span>}
+            {windStatus.state === 'error' && (
+              <span className="wind-error" title={windStatus.message}>
+                wind: {windStatus.message}
+              </span>
+            )}
             {windStatus.state === 'ok' && wind && windHere && (
               <span
                 title={`MERRA-2 wind at 10 m ${windHere.where}, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)}, ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}

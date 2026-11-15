@@ -41,10 +41,25 @@ export function viewBox(map: maplibregl.Map, focus?: [number, number]): [number,
   return [w, s, e, n]
 }
 
-// True if the grid already has complete wind for the whole box (then no new request is needed).
-export function covers(g: WindGrid, box: [number, number, number, number]): boolean {
-  if (!g.bbox) return false
-  return box[0] >= g.bbox[0] && box[1] >= g.bbox[1] && box[2] <= g.bbox[2] && box[3] <= g.bbox[3]
+type Box = [number, number, number, number]
+
+// The server widens each request to this tile grid (WIND_TILE_DEG in backend/server.py); same rule here, so the
+// website knows which area a request will cover before the answer arrives.
+export const TILE_DEG = 5
+
+export function tileBox([w, s, e, n]: Box): Box {
+  const t = TILE_DEG
+  return [
+    Math.max(-180, Math.floor(w / t) * t),
+    Math.max(-90, Math.floor(s / t) * t),
+    Math.min(180, Math.ceil(e / t) * t),
+    Math.min(90, Math.ceil(n / t) * t),
+  ]
+}
+
+// True if `outer` contains all of `inner`.
+export function boxCovers(outer: Box, inner: Box): boolean {
+  return inner[0] >= outer[0] && inner[1] >= outer[1] && inner[2] <= outer[2] && inner[3] <= outer[3]
 }
 
 // earth.nullschool.net "wind" overlay: segmented colour scale by speed (m/s).
