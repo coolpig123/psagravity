@@ -4,6 +4,7 @@ import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-rea
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 import LocationSearch from './LocationSearch'
+import StartTimePicker from './StartTimePicker'
 import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, strideFor, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
@@ -640,10 +641,7 @@ ${err instanceof Error ? err.message : err}`)
         <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}><Undo2 />Undo</button>
         <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}><Trash2 />Clear</button>
         <button onClick={extract} disabled={mode !== 'locked'}><Download />Extract Data</button>
-        <label className="start">
-          Start (UTC)
-          <input value={start} onChange={(e) => setStart(e.target.value)} placeholder={DEFAULT_START} size={18} />
-        </label>
+        <StartTimePicker value={start} onChange={setStart} />
         <label className="start">
           Weather
           <select value={weatherSource} onChange={(e) => setWeatherSource(e.target.value as typeof weatherSource)}>

@@ -104,6 +104,23 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
   background: #fff;
 }
 
+/* Start time picker: local calendar + clock (or typed UTC), the other zone in small text under it. */
+.start-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.start-other {
+  font: 11px ui-monospace, Consolas, monospace;
+  color: #777;
+  white-space: nowrap;
+}
+
+.start-time button {
+  padding: 6px 9px;
+}
+
 /* Prediction summary under the map. */
 .panel {
   width: var(--content-width);
