@@ -31,9 +31,9 @@ for _env_candidate in (_GEE_DIR / ".env", _REPO_DIR / "real_fires" / ".env", _RE
 
 BASE_URL = "https://api.meteomatics.com"
 
-# Shared NASA Space Apps Hackathon Meteomatics credentials (can be overridden in .env)
-DEFAULT_USERNAME = "hackathon_nasa_space_apps_fueredi_alon"
-DEFAULT_PASSWORD = "cnS0A6ESYDCydZN8W9z8"
+# No credentials in the code: the team account goes in a .env file (never committed), see .env.example.
+DEFAULT_USERNAME = ""
+DEFAULT_PASSWORD = ""
 
 # Mapping from internal geelayers variable name -> Meteomatics parameter code
 CORE_PARAMETERS: dict[str, str] = {
@@ -59,7 +59,7 @@ PARAM_TO_VAR: dict[str, str] = {v: k for k, v in EXTENDED_PARAMETERS.items()}
 
 
 def get_credentials(username: str | None = None, password: str | None = None) -> tuple[str, str]:
-    """Return (username, password) from arguments, environment variables, or team hackathon defaults."""
+    """Return (username, password) from arguments or environment variables / .env."""
     user = username or os.environ.get("METEOMATICS_USERNAME", "").strip() or DEFAULT_USERNAME
     pwd = password or os.environ.get("METEOMATICS_PASSWORD", "").strip() or DEFAULT_PASSWORD
     if not user or not pwd:
@@ -71,7 +71,7 @@ def get_credentials(username: str | None = None, password: str | None = None) ->
 
 
 def has_credentials() -> bool:
-    """True if Meteomatics credentials are available (from environment or team defaults)."""
+    """True if Meteomatics credentials are available (from environment variables / .env)."""
     return bool(
         (os.environ.get("METEOMATICS_USERNAME", "").strip() or DEFAULT_USERNAME)
         and (os.environ.get("METEOMATICS_PASSWORD", "").strip() or DEFAULT_PASSWORD)
