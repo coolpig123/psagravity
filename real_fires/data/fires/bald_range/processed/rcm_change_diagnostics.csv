@@ -1,0 +1,4 @@
+date,raw_RL_offset_outside_db,median_dRL_in_db,median_dRR_in_db,median_dRLRR_in_db,median_dRL_out_db,median_dRR_out_db,median_dRLRR_out_db,auc_dRL,auc_dRR,auc_dRLRR
+2026-08-09,11.9,-0.69,-0.62,-0.06,0.13,0.14,0.05,0.69,0.669,0.528
+2026-08-25,-0.03,0.22,-0.14,0.42,0.1,0.11,0.0,0.463,0.579,0.403
+2026-09-02,0.05,0.72,0.47,0.27,0.06,0.08,0.01,0.347,0.409,0.439

@@ -1,0 +1,122 @@
+{
+ "fire": "Bald Range (BCWS K51490)",
+ "official_ha": 25163.2,
+ "reference_scene": "RCM2_OK4114697_PK4292834_1_SC30MCPD_20260801_140821_CH_CV_MLC",
+ "post_scenes": [
+  "RCM1_OK4114697_PK4307194_1_SC30MCPD_20260809_140811_CH_CV_MLC",
+  "RCM2_OK4114697_PK4335941_1_SC30MCPD_20260825_140819_CH_CV_MLC",
+  "RCM1_OK4114697_PK4349967_1_SC30MCPD_20260902_140809_CH_CV_MLC"
+ ],
+ "rule": "RL drop >= 1.5 dB, 5x5 px (100 m)",
+ "per_date": [
+  {
+   "date": "2026-08-09 14:08",
+   "hours_after_ignition": 38.8,
+   "drop_db": 1.5,
+   "detected_ha": 8419.3,
+   "detected_inside_ha": 4331.0,
+   "cover_pct": 18.6,
+   "precision_pct": 51.4,
+   "iou_pct": 15.9,
+   "false_alarm_pct": 13.95,
+   "valid_in_perimeter_pct": 92.3
+  },
+  {
+   "date": "2026-08-25 14:08",
+   "hours_after_ignition": 422.8,
+   "drop_db": 1.5,
+   "detected_ha": 2315.1,
+   "detected_inside_ha": 985.7,
+   "cover_pct": 4.2,
+   "precision_pct": 42.6,
+   "iou_pct": 4.0,
+   "false_alarm_pct": 4.54,
+   "valid_in_perimeter_pct": 92.3
+  },
+  {
+   "date": "2026-09-02 14:08",
+   "hours_after_ignition": 614.8,
+   "drop_db": 1.5,
+   "detected_ha": 2719.5,
+   "detected_inside_ha": 779.6,
+   "cover_pct": 3.4,
+   "precision_pct": 28.7,
+   "iou_pct": 3.1,
+   "false_alarm_pct": 6.62,
+   "valid_in_perimeter_pct": 92.3
+  }
+ ],
+ "persistent_growth": [
+  {
+   "date": "2026-08-09",
+   "detected_ha": 420.1,
+   "detected_inside_ha": 204.5,
+   "cover_pct": 0.9,
+   "precision_pct": 48.7,
+   "iou_pct": 0.9,
+   "false_alarm_pct": 0.74,
+   "valid_in_perimeter_pct": 92.2
+  },
+  {
+   "date": "2026-08-25",
+   "detected_ha": 824.8,
+   "detected_inside_ha": 278.3,
+   "cover_pct": 1.2,
+   "precision_pct": 33.7,
+   "iou_pct": 1.2,
+   "false_alarm_pct": 1.87,
+   "valid_in_perimeter_pct": 92.2
+  },
+  {
+   "date": "2026-09-02",
+   "detected_ha": 2716.7,
+   "detected_inside_ha": 779.6,
+   "cover_pct": 3.4,
+   "precision_pct": 28.7,
+   "iou_pct": 3.1,
+   "false_alarm_pct": 6.62,
+   "valid_in_perimeter_pct": 92.2
+  }
+ ],
+ "diagnostics": [
+  {
+   "date": "2026-08-09",
+   "raw_RL_offset_outside_db": 11.9,
+   "median_dRL_in_db": -0.69,
+   "median_dRR_in_db": -0.62,
+   "median_dRLRR_in_db": -0.06,
+   "median_dRL_out_db": 0.13,
+   "median_dRR_out_db": 0.14,
+   "median_dRLRR_out_db": 0.05,
+   "auc_dRL": 0.69,
+   "auc_dRR": 0.669,
+   "auc_dRLRR": 0.528
+  },
+  {
+   "date": "2026-08-25",
+   "raw_RL_offset_outside_db": -0.03,
+   "median_dRL_in_db": 0.22,
+   "median_dRR_in_db": -0.14,
+   "median_dRLRR_in_db": 0.42,
+   "median_dRL_out_db": 0.1,
+   "median_dRR_out_db": 0.11,
+   "median_dRLRR_out_db": 0.0,
+   "auc_dRL": 0.463,
+   "auc_dRR": 0.579,
+   "auc_dRLRR": 0.403
+  },
+  {
+   "date": "2026-09-02",
+   "raw_RL_offset_outside_db": 0.05,
+   "median_dRL_in_db": 0.72,
+   "median_dRR_in_db": 0.47,
+   "median_dRLRR_in_db": 0.27,
+   "median_dRL_out_db": 0.06,
+   "median_dRR_out_db": 0.08,
+   "median_dRLRR_out_db": 0.01,
+   "auc_dRL": 0.347,
+   "auc_dRR": 0.409,
+   "auc_dRLRR": 0.439
+  }
+ ]
+}
