@@ -3,7 +3,7 @@
 Start: fire_state("bald_range", 08-10 02:00 UTC) = RCM SC30MCPA 08-10 01:34 (2 days after ignition; no NISAR pass
 since 07-27 and no FEDS used). Model: firespread.predict (Earth Engine inputs, no NISAR, no optical scars) +
 simulate_spread, with the hindcast calibration from the Bug Fire held fixed (2 h per CA step, burn_prob >= 0.9;
-hindcast branch, results/calibration.json). Targets: FEDS perimeters (fireid 11710), the radar state at 08-22
+hindcast/results/calibration.json). Targets: FEDS perimeters (fireid 11710), the radar state at 08-22
 (RCM 08-22 + NISAR A77 08-18) and the BCWS final perimeter.
 Scores on the NEWLY burned area (target minus start), as in hindcast/metrics.py, vs the same-area circle baseline
 (start grown by the same distance everywhere until it adds as many cells as the model).
@@ -33,7 +33,9 @@ from firespread.simulate import simulate_spread
 
 D = REPO_ROOT / "data" / "fires" / "bald_range"
 T0 = pd.Timestamp("2026-08-10T02:00Z")
-HOURS_PER_STEP, THRESHOLD, RUNS = 2.0, 0.9, 200      # hindcast calibration on the Bug Fire, held fixed
+# Hindcast calibration on the Bug Fire, held fixed (hindcast/results/calibration.json: 2 h per step, >= 0.9).
+CALIBRATION = json.loads((REPO_ROOT.parent / "hindcast" / "results" / "calibration.json").read_text())
+HOURS_PER_STEP, THRESHOLD, RUNS = float(CALIBRATION["hours_per_step"]), float(CALIBRATION["threshold"]), 200
 FEDS_ID = 11710.0
 FEDS_TARGET_HOURS = (24, 48, 96)                      # FEDS perimeters nearest to T0 + these hours
 
