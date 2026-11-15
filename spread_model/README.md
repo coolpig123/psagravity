@@ -51,13 +51,13 @@ It repeats this in 200 random runs:
 ```python
 from firespread import predict
 from firespread.simulate import simulate_spread
-sim = simulate_spread(predict(polygon=..., start=...), steps=30)
+sim = simulate_spread(predict(polygon=..., start=..., weather_source="meteomatics", hours=12), steps=30)
 sim["burn_prob"]      # (y, x): share of runs in which the cell burned within 30 steps
 sim["arrival_step"]   # (y, x): mean step at which it caught fire
+sim["arrival_hours"]  # (y, x): mean hours from start at which it caught fire
 ```
 
-One step moves the fire at most one cell, so 30 steps at 100 m reach at most 3 km. The weather is held at the
-start time for all steps, and how many hours a step stands for is not calibrated yet.
+One step moves the fire at most one cell, so 30 steps at 100 m reach at most 3 km. When multi-hour weather forecasts are fetched (e.g. `weather_source="meteomatics"` or `"gfs"` with `hours=12`), `spread_probabilities()` computes `p_spread_time` `(time, direction, y, x)` across every forecast hour, and `simulate_spread()` interpolates those time-developing spread probabilities as the simulation advances in time (`time_developing=True`).
 
 ### Web app
 

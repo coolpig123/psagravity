@@ -13,6 +13,7 @@ from .api import DEFAULT_LAYERS, describe, get_fire_inputs, get_layers, get_weat
 from .auth import init
 from .grid import Grid, utm_epsg
 from .layers import LAYERS, VARIABLES, WEATHER
+from .meteomatics import fetch_meteomatics_weather, has_credentials as has_meteomatics_credentials
 
 __all__ = ["Grid", "utm_epsg", "in_conus", "init", "get_fire_inputs", "get_layers", "get_weather", "regrid", "describe",
-           "DEFAULT_LAYERS", "LAYERS", "WEATHER", "VARIABLES"]
+           "fetch_meteomatics_weather", "has_meteomatics_credentials", "DEFAULT_LAYERS", "LAYERS", "WEATHER", "VARIABLES"]
