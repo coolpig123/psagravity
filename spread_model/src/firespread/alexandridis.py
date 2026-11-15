@@ -97,19 +97,24 @@ class AlexandridisParams:
     spot_max_m: float = 3000.0              # maximum jump distance (m)
     spot_cone_deg: float = 15.0             # angular spread (std dev, degrees) around the downwind bearing
     # Hotter cells loft more firebrands: where VIIRS FRP is known (frp_mw, active front only), the launch probability
-    # is multiplied by 1 + spot_frp_boost * FRP / (FRP + spot_frp_ref_mw) (at most 1 + spot_frp_boost). Not calibrated.
+    # is multiplied by 1 + spot_frp_boost * FRP / (FRP + spot_frp_ref_mw) (at most 1 + spot_frp_boost).
     spot_frp_boost: float = 0.5
     spot_frp_ref_mw: float = 50.0
 
     @classmethod
     def calibrated(cls) -> AlexandridisParams:
-        """Parameters fitted on 57 FEDS 12 h segments across 4 Western US fires (Biscar, Bug, Colwash, Crosswhite)."""
+        """Parameters jointly fitted with NISAR + VIIRS FRP on 57 FEDS 12 h segments across 4 Western US fires."""
         return cls(
-            p0=0.93, c1=0.095, c2=0.057, a=0.056, b_emc=0.006,
-            veg_by_lifeform={1: 0.4, 2: 0.21, 3: 0.16},
+            p0=0.93, c1=0.118, c2=0.023, a=0.11, b_emc=0.002,
+            veg_by_lifeform={1: 0.4, 2: 0.1, 3: 0.28},
             diagonal_factor=1.0,
-            spot_prob=0.45, spot_use_gust=True, spot_min_wind_ms=5.8,
-            spot_min_m=260.0, spot_wind_dist_m_per_ms=237.0, spot_max_m=7000.0, spot_cone_deg=9.5,
+            den_sparse=-0.43, den_normal=0.0, den_dense=0.76,
+            sparse_below_pct=26.0, dense_from_pct=48.0,
+            dry_dry=0.0, dry_normal=0.0, dry_wet=0.0,
+            dry_below_m3m3=0.13, wet_from_m3m3=0.21,
+            spot_prob=0.44, spot_use_gust=True, spot_min_wind_ms=6.2,
+            spot_min_m=230.0, spot_wind_dist_m_per_ms=176.0, spot_max_m=5000.0, spot_cone_deg=9.7,
+            spot_frp_boost=1.91, spot_frp_ref_mw=55.0,
         )
 
 

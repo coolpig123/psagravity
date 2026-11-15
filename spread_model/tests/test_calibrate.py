@@ -59,6 +59,10 @@ def test_calibrated_preset_and_search_params():
     cal = AlexandridisParams.calibrated()
     p = params_of(CALIBRATED)
     assert cal.p0 == p.p0 and cal.c1 == p.c1 and cal.c2 == p.c2
+    assert cal.den_sparse == p.den_sparse and cal.den_dense == p.den_dense
+    assert cal.sparse_below_pct == p.sparse_below_pct and cal.dense_from_pct == p.dense_from_pct
+    assert cal.dry_dry == p.dry_dry and cal.dry_wet == p.dry_wet
+    assert cal.spot_frp_boost == p.spot_frp_boost and cal.spot_frp_ref_mw == p.spot_frp_ref_mw
     assert cal.veg_by_lifeform[2] > 0 and cal.veg_by_lifeform[3] > 0
     res = spread_probabilities(make_ds(u=7.0), params=cal)
     assert float(res["p_spot_launch"].max()) > 0.0

@@ -20,9 +20,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .alexandridis import (DIRECTIONS, AlexandridisParams, mask_reasons, p_moisture, p_veg, shift,
+from .alexandridis import (DIRECTIONS, AlexandridisParams, _classes, mask_reasons, p_moisture, p_veg, shift,
                            slope_angle_deg)
-from .calibrate import OUT_DIR, active_front, first_burn_step, soft_iou
+from .calibrate import OUT_DIR, active_front_and_frp, first_burn_step, soft_iou
 
 RUNS = 50
 SPACE = {   # name: (low, high) for continuous, list for discrete
@@ -32,27 +32,42 @@ SPACE = {   # name: (low, high) for continuous, list for discrete
     "a": (0.02, 0.14),                   # slope term (1/deg)
     "b_emc": (0.0, 0.10),                # Simard EMC moisture sensitivity (1/%)
     "v_shrub": (-0.1, 0.35),             # P_veg for shrub lifeform (code 2)
-    "v_grass": (-0.3, 0.25),             # P_veg for grass/herbaceous lifeform (code 3)
+    "v_grass": (-0.3, 0.30),             # P_veg for grass/herbaceous lifeform (code 3)
     "diagonal_factor": [round(1 / math.sqrt(2), 6), 1.0],
     "steps_per_12h": [1, 2, 3, 4],
-    "spot_prob": (0.0, 0.65),
+    "den_sparse": (-0.65, 0.0),          # P_den when NISAR cover < sparse_below_pct
+    "den_dense": (0.0, 0.85),            # P_den when NISAR cover >= dense_from_pct
+    "sparse_below_pct": (16.0, 36.0),
+    "dense_from_pct": (44.0, 65.0),
+    "dry_dry": (0.0, 0.35),              # P_dry when NISAR soil moisture < dry_below_m3m3
+    "dry_wet": (-0.35, 0.0),             # P_dry when NISAR soil moisture >= wet_from_m3m3
+    "dry_below_m3m3": (0.09, 0.145),
+    "wet_from_m3m3": (0.165, 0.25),
+    "spot_prob": (0.0, 0.70),
     "spot_min_wind_ms": (5.0, 7.5),
     "spot_min_m": (200.0, 800.0),
     "spot_wind_dist_m_per_ms": (80.0, 360.0),
     "spot_max_m": [3000.0, 5000.0, 7000.0],
-    "spot_cone_deg": (8.0, 22.0),
+    "spot_cone_deg": (7.5, 22.0),
     "spot_gust": [0, 1],                 # 1 = firebrands lofted by the gust speed (RTMA gust_ms), 0 = mean wind
+    "spot_frp_boost": (0.0, 2.5),        # max relative spotting launch multiplier from VIIRS FRP
+    "spot_frp_ref_mw": (5.0, 80.0),
 }
 PAPER = {"p0": 0.58, "c1": 0.045, "c2": 0.131, "a": 0.078, "b_emc": 0.05, "v_shrub": 0.0, "v_grass": -0.3,
-         "diagonal_factor": round(1 / math.sqrt(2), 6), "steps_per_12h": 2, "spot_prob": 0.0,
-         "spot_min_wind_ms": 6.0, "spot_min_m": 200.0, "spot_wind_dist_m_per_ms": 120.0, "spot_max_m": 3000.0,
-         "spot_cone_deg": 15.0, "spot_gust": 0}
-GEMINI = {**PAPER, "spot_prob": 0.12}    # paper values + initial spotting defaults
+         "diagonal_factor": round(1 / math.sqrt(2), 6), "steps_per_12h": 2,
+         "den_sparse": -0.4, "den_dense": 0.3, "sparse_below_pct": 30.0, "dense_from_pct": 60.0,
+         "dry_dry": 0.3, "dry_wet": -0.3, "dry_below_m3m3": 0.10, "wet_from_m3m3": 0.25,
+         "spot_prob": 0.0, "spot_min_wind_ms": 6.0, "spot_min_m": 200.0, "spot_wind_dist_m_per_ms": 120.0,
+         "spot_max_m": 3000.0, "spot_cone_deg": 15.0, "spot_gust": 0, "spot_frp_boost": 0.0, "spot_frp_ref_mw": 50.0}
+GEMINI = {**PAPER, "spot_prob": 0.12, "spot_frp_boost": 0.5}    # paper + initial spotting/FRP defaults
 STAGE1 = {**PAPER, "p0": 0.8, "c1": 0.0225, "c2": 0.0655}
-CALIBRATED = {"p0": 0.93, "c1": 0.095, "c2": 0.057, "a": 0.056, "b_emc": 0.006, "v_shrub": 0.21, "v_grass": 0.16,
-              "diagonal_factor": 1.0, "steps_per_12h": 1, "spot_prob": 0.45, "spot_min_wind_ms": 5.8,
-              "spot_min_m": 260.0, "spot_wind_dist_m_per_ms": 237.0, "spot_max_m": 7000.0,
-              "spot_cone_deg": 9.5, "spot_gust": 1}
+CALIBRATED = {"p0": 0.93, "c1": 0.118, "c2": 0.023, "a": 0.11, "b_emc": 0.002, "v_shrub": 0.1, "v_grass": 0.28,
+              "diagonal_factor": 1.0, "steps_per_12h": 1,
+              "den_sparse": -0.43, "den_dense": 0.76, "sparse_below_pct": 26.0, "dense_from_pct": 48.0,
+              "dry_dry": 0.0, "dry_wet": 0.0, "dry_below_m3m3": 0.13, "wet_from_m3m3": 0.21,
+              "spot_prob": 0.44, "spot_min_wind_ms": 6.2, "spot_min_m": 230.0, "spot_wind_dist_m_per_ms": 176.0,
+              "spot_max_m": 5000.0, "spot_cone_deg": 9.7, "spot_gust": 1,
+              "spot_frp_boost": 1.91, "spot_frp_ref_mw": 55.0}
 
 
 def load_segments() -> list[dict]:
@@ -63,7 +78,9 @@ def load_segments() -> list[dict]:
         assert float(ds.y[0]) > float(ds.y[-1]), "spotting assumes rows run north -> south"
         start = ds["initial_burned"].values.astype(bool)
         target = ds["target"].values.astype(bool)
-        front = active_front(ds, ds.attrs["fire"], pd.Timestamp(ds.attrs["seg_t0"]))
+        ffp = active_front_and_frp(ds, ds.attrs["fire"], pd.Timestamp(ds.attrs["seg_t0"]))
+        front = None if ffp is None else ffp[0]
+        frp_mw = np.zeros(start.shape, np.float32) if ffp is None else ffp[1]
         snap = ds.drop_vars("target").isel(time=0)
         res_m = float(ds.attrs["res_m"])
 
@@ -73,6 +90,10 @@ def load_segments() -> list[dict]:
         emc = np.nan_to_num(moist_parts["emc_pct"], nan=base.emc_ref_pct).astype(np.float32)
         reason, _ = mask_reasons(snap, start)
         mask = (reason == 0).astype(np.float32)
+        ncov = (snap["nisar_cover_pct"].values.astype(np.float32)
+                if "nisar_cover_pct" in snap else np.full(start.shape, np.nan, np.float32))
+        nsm = (snap["nisar_soil_moisture"].values.astype(np.float32)
+               if "nisar_soil_moisture" in snap else np.full(start.shape, np.nan, np.float32))
 
         u = np.nan_to_num(snap["wind_u_ms"].values.astype(np.float32))
         v = np.nan_to_num(snap["wind_v_ms"].values.astype(np.float32))
@@ -93,6 +114,7 @@ def load_segments() -> list[dict]:
 
         segs.append({"name": f"{ds.attrs['fire']}/{path.stem}", "fire": ds.attrs["fire"],
                      "start": start, "new": ~start, "front": start if front is None else front,
+                     "frp_mw": frp_mw, "nisar_cover_pct": ncov, "nisar_soil_moisture": nsm,
                      "target": target, "target_new": target[~start],
                      "hours": float(ds.attrs["seg_hours"]), "res_m": res_m,
                      "veg_default": veg_default, "lf": lf, "emc": emc, "mask": mask,
@@ -105,10 +127,16 @@ def params_of(theta: dict) -> AlexandridisParams:
     return dataclasses.replace(
         b, p0=theta["p0"], c1=theta["c1"], c2=theta["c2"], a=theta["a"], b_emc=theta["b_emc"],
         veg_by_lifeform={1: 0.4, 2: theta["v_shrub"], 3: theta["v_grass"]},
-        diagonal_factor=theta["diagonal_factor"], spot_prob=max(theta["spot_prob"], 0.0),
+        diagonal_factor=theta["diagonal_factor"],
+        den_sparse=theta["den_sparse"], den_dense=theta["den_dense"],
+        sparse_below_pct=theta["sparse_below_pct"], dense_from_pct=theta["dense_from_pct"],
+        dry_dry=theta["dry_dry"], dry_wet=theta["dry_wet"],
+        dry_below_m3m3=theta["dry_below_m3m3"], wet_from_m3m3=theta["wet_from_m3m3"],
+        spot_prob=max(theta["spot_prob"], 0.0),
         spot_use_gust=bool(theta["spot_gust"]), spot_min_wind_ms=theta["spot_min_wind_ms"],
         spot_min_m=theta["spot_min_m"], spot_wind_dist_m_per_ms=theta["spot_wind_dist_m_per_ms"],
-        spot_max_m=theta["spot_max_m"], spot_cone_deg=theta["spot_cone_deg"])
+        spot_max_m=theta["spot_max_m"], spot_cone_deg=theta["spot_cone_deg"],
+        spot_frp_boost=theta["spot_frp_boost"], spot_frp_ref_mw=theta["spot_frp_ref_mw"])
 
 
 def score(theta: dict, seg: dict, runs: int = RUNS) -> tuple[float, float]:
@@ -120,8 +148,13 @@ def score(theta: dict, seg: dict, runs: int = RUNS) -> tuple[float, float]:
         veg[seg["lf"] == 2] = theta["v_shrub"]
         veg[seg["lf"] == 3] = theta["v_grass"]
 
-    moist = np.exp(np.clip(-theta["b_emc"] * (seg["emc"] - 8.0), -15.0, 15.0))
-    target_fac = (theta["p0"] * np.maximum(1.0 + veg, 0.05) * moist * seg["mask"]).astype(np.float32)
+    den, _ = _classes(seg["nisar_cover_pct"], theta["sparse_below_pct"], theta["dense_from_pct"],
+                      theta["den_sparse"], 0.0, theta["den_dense"])
+    dry, _ = _classes(seg["nisar_soil_moisture"], theta["dry_below_m3m3"], theta["wet_from_m3m3"],
+                      theta["dry_dry"], 0.0, theta["dry_wet"])
+    moist = np.exp(np.clip(-theta["b_emc"] * (seg["emc"] - 8.0), -15.0, 15.0)) * (1.0 + dry)
+    target_fac = (theta["p0"] * np.maximum(1.0 + veg, 0.05) * np.maximum(1.0 + den, 0.05)
+                  * moist * seg["mask"]).astype(np.float32)
 
     h, w = seg["start"].shape
     p = np.empty((8, h, w), np.float32)
@@ -139,7 +172,11 @@ def score(theta: dict, seg: dict, runs: int = RUNS) -> tuple[float, float]:
         vmin = theta["spot_min_wind_ms"]
         above = np.maximum(sp_spd - vmin, 0.0)
         wind_factor = np.where(sp_spd > vmin, 1.0 - np.exp(-above / 4.0), 0.0)
-        launch = np.clip(theta["spot_prob"] * np.maximum(1.0 + veg, 0.0) * wind_factor, 0.0, 1.0).astype(np.float32)
+        launch = theta["spot_prob"] * np.maximum(1.0 + veg, 0.0) * np.maximum(1.0 + den, 0.0) * wind_factor
+        if theta["spot_frp_boost"] > 0:
+            f = np.maximum(seg["frp_mw"], 0.0)
+            launch = launch * (1.0 + theta["spot_frp_boost"] * f / (f + max(theta["spot_frp_ref_mw"], 1e-6)))
+        launch = np.clip(launch, 0.0, 1.0).astype(np.float32)
         min_m, max_m = theta["spot_min_m"], theta["spot_max_m"]
         dist_m = np.clip(min_m + theta["spot_wind_dist_m_per_ms"] * above, min_m, max_m).astype(np.float32)
         spot = {"launch": launch, "ignite": np.clip(target_fac, 0.0, 1.0), "dist_m": dist_m,
@@ -154,7 +191,12 @@ def score(theta: dict, seg: dict, runs: int = RUNS) -> tuple[float, float]:
 
 
 def sample(rng) -> dict:
-    return {k: (rng.choice(v).item() if isinstance(v, list) else float(rng.uniform(*v))) for k, v in SPACE.items()}
+    out = {k: (rng.choice(v).item() if isinstance(v, list) else float(rng.uniform(*v))) for k, v in SPACE.items()}
+    if out["dense_from_pct"] < out["sparse_below_pct"] + 6.0:
+        out["dense_from_pct"] = min(65.0, out["sparse_below_pct"] + 8.0)
+    if out["wet_from_m3m3"] < out["dry_below_m3m3"] + 0.02:
+        out["wet_from_m3m3"] = min(0.25, out["dry_below_m3m3"] + 0.02)
+    return out
 
 
 def perturb(theta: dict, rng, scale: float = 0.15) -> dict:
@@ -167,6 +209,10 @@ def perturb(theta: dict, rng, scale: float = 0.15) -> dict:
             out[k] = v[int(np.clip(i + rng.choice([-1, 1]), 0, len(v) - 1))]
         else:
             out[k] = float(np.clip(out[k] + rng.normal(0, scale * (v[1] - v[0])), *v))
+    if out["dense_from_pct"] < out["sparse_below_pct"] + 6.0:
+        out["dense_from_pct"] = min(65.0, out["sparse_below_pct"] + 8.0)
+    if out["wet_from_m3m3"] < out["dry_below_m3m3"] + 0.02:
+        out["wet_from_m3m3"] = min(0.25, out["dry_below_m3m3"] + 0.02)
     return out
 
 

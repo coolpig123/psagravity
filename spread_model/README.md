@@ -358,4 +358,20 @@ python -m firespread.calibrate_search --n 120 --refine 60
 **Next:**
 - Give each step a duration from the rate of spread (Rothermel), with hourly weather inside the 12 h window.
 - Score arrival times against GOES and VIIRS.
-- Compare with and without NISAR.
+
+### Joint NISAR & VIIRS FRP calibration (2026-11-15)
+
+All 57 cached segments (`spread_model/data/calibration/`) were populated with strictly pre-`seg_t0` NISAR GCOV vegetation cover (`nisar_cover_pct`, 100% coverage) + NISAR soil moisture (`nisar_soil_moisture`, 73.0%–99.7% valid) + NISAR burn scar (`nisar_burned`), and `calibrate.active_front_and_frp()` now uses `front_from_points` to exclude unrelated hotspots outside the start perimeter while attaching `frp_mw`.
+
+- **`nisar_cover_pct` (`p_den`) gives strong, consistent signal:** growth cells averaged **47.9%** cover (median 54.8%) vs **30.6%** (median 29.4%) for non-growth burnable cells. Calibrating thresholds (`sparse_below_pct = 26%`, `dense_from_pct = 48%`) with `den_sparse = -0.43`, `den_dense = +0.76` lifts growth IoU across all 4 fires (`Biscar`, `Bug Fire`, `Colwash`, and `Crosswhite`).
+- **`nisar_soil_moisture` (`p_dry`) is neutral across these July–Aug 2026 fires:** both growth and non-growth cells averaged **0.150 m³/m³**; enforcing physical monotonicity (`dry_dry >= 0 >= dry_wet`) converged cleanly to neutral `dry_dry = 0.0`, `dry_wet = 0.0`.
+- **VIIRS FRP spotting (`spot_frp_boost = 1.91`, `spot_frp_ref_mw = 55.0` with `spot_prob = 0.44`):** median active-front FRP is 4.2 MW (90th pct 36.6 MW), yielding a small positive improvement on Crosswhite (`0.1772 → 0.1774`) while preserving physical scaling for intense plumes.
+
+| Growth IoU (new area only, `runs=200` / `front_from_points`) | Biscar (2) | Bug (7) | Colwash (1) | Crosswhite (47) | Fire mean | Segment mean |
+|---|---|---|---|---|---|---|
+| Paper values (no NISAR / no FRP) | 0.034 | 0.064 | 0.077 | 0.167 | 0.086 | 0.148 |
+| Prior `calibrated()` (`front_from_points`, no NISAR/FRP) | 0.054 | 0.074 | 0.129 | 0.176 | 0.108 | 0.158 |
+| New preset without NISAR or FRP | 0.054 | 0.074 | 0.131 | 0.175 | 0.109 | 0.158 |
+| New preset with NISAR only (`no FRP`) | 0.056 | 0.075 | 0.140 | 0.177 | 0.112 | 0.160 |
+| **New `AlexandridisParams.calibrated()` (NISAR + FRP)** | **0.056** | **0.075** | **0.140** | **0.177** | **0.1121** | **0.1599** |
+| **Leave one fire out (constrained physical, held-out fire)** | **0.055** | **0.076** | **0.133** | **0.177** | **0.1102** | — |

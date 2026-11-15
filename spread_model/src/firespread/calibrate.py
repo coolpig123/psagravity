@@ -133,19 +133,24 @@ def _viirs_points(fire: str) -> pd.DataFrame:
     return _FIRE_POINTS[fire]
 
 
-def active_front(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> np.ndarray | None:
-    """Cells with a VIIRS detection in the ACTIVE_HOURS before t0 (where the fire was really burning), or None."""
-    from .active_front import points_to_grid, project_front
+def active_front_and_frp(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> tuple[np.ndarray, np.ndarray] | None:
+    """(active_front bool, frp_mw float32) from VIIRS detections in ACTIVE_HOURS before t0 touching start, or None."""
+    from .active_front import front_from_points
+    if float(ds.attrs["res_m"]) <= 0:
+        return None
     pts = _viirs_points(fire)
     pts = pts[(pts["time_utc"] > t0 - pd.Timedelta(hours=ACTIVE_HOURS)) & (pts["time_utc"] <= t0)]
     if pts.empty:
         return None
-    out, _ = points_to_grid(ds, pts["lat"].values, pts["lon"].values)
-    if out.any() and "initial_burned" in ds:
-        # FEDS buffers VIIRS detections by ~500 m when building the start polygon, leaving ~2/3 of VIIRS cell centres
-        # 1 cell inside `start` with no unburned neighbours. Activate adjacent outer-rim cells of `start` as well.
-        out = project_front(ds["initial_burned"].values, out)
-    return out if out.any() and float(ds.attrs["res_m"]) > 0 else None
+    frp = pts["frp_mw"].values if "frp_mw" in pts else None
+    burned = ds["initial_burned"].values if "initial_burned" in ds else np.zeros((ds.sizes["y"], ds.sizes["x"]), bool)
+    return front_from_points(ds, pts["lat"].values, pts["lon"].values, frp_mw=frp, burned=burned)
+
+
+def active_front(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> np.ndarray | None:
+    """Cells with a VIIRS detection in the ACTIVE_HOURS before t0 (where the fire was really burning), or None."""
+    res = active_front_and_frp(ds, fire, t0)
+    return None if res is None else res[0]
 
 
 def first_burn_step(p_spread: np.ndarray, start: np.ndarray, max_steps: int, runs: int = RUNS,
