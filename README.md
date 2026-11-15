@@ -61,7 +61,7 @@ cp .env.example .env                                        # FIRMS_MAP_KEY (+ E
 ### איפה מה נמצא
 | נתיב | מה |
 |---|---|
-| `real_fires/src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
+| `real_fires/src/firedata/` | קוד: `firms`, `goes`, `feds`, `wfigs`, `nisar`, `merra2` (רוח ומזג אוויר מ-MERRA-2: `python -m firedata.merra2 fire bug_fire`), `process`, `metrics`, `report`, `web`, `config` (שריפה חדשה = `FireConfig` חדש) |
 | `real_fires/scripts/build_ground_truth.py` | מריץ את כל ה-pipeline לשריפה אחת |
 | `real_fires/data/fires/<fire>/` | `processed/` (טבלאות), `figures/` (גרפים + דף אינטראקטיבי), `README.md` |
 | `real_fires/docs/fires_summary.md` | טבלת הסיכום + הגדרות המדדים |
