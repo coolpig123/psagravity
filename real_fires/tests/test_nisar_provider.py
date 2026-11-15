@@ -280,6 +280,41 @@ def test_stalled_remote_read_is_retried(tmp_path, monkeypatch):
         na.read_layers("https://example/remote.h5", na.GCOV_GROUP, ["HVHV"], tg, cache_dir=None)
 
 
+def test_remote_chunk_batches_persist_and_retry_without_losing_prior_batches(tmp_path, monkeypatch):
+    g = model_grid()
+    local = chunked_copy(write_gcov(tmp_path / "plain.h5", g), tmp_path / "chunked.h5", chunks=(32, 32))
+    tg = na.TargetGrid.from_request(Request(g))
+    names = ["HHHH", "HVHV", "mask"]
+    want = na.read_layers(local, na.GCOV_GROUP, names, tg, prepare=npv._gcov_valid, cache_dir=None)
+
+    base = LocalAsRemote()
+    batch_sizes = []
+    seen_calls = {"n": 0, "persisted_after_batch1": 0}
+    chunk_dir = tmp_path / "c" / "chunks" / "G_BATCH"
+
+    class FlakyBatchRemote:
+        def open(self, url, **kw):
+            return base.open(url, **kw)
+
+        def cat_ranges(self, paths, starts, ends, on_error="raise"):
+            seen_calls["n"] += 1
+            batch_sizes.append(len(paths))
+            if seen_calls["n"] == 2:
+                # Batch 1 must already be persisted on disk before batch 2 even runs
+                seen_calls["persisted_after_batch1"] = sum(1 for _ in chunk_dir.rglob("*.bin"))
+                raise TimeoutError("transient batch 2 timeout")
+            return base.cat_ranges(paths, starts, ends, on_error=on_error)
+
+    monkeypatch.setattr(na, "CHUNK_BATCH_SIZE", 4)
+    monkeypatch.setattr(na, "_remote", lambda url: (FlakyBatchRemote(), url, None))
+    got = na.read_layers("remote://" + str(local), na.GCOV_GROUP, names, tg,
+                         prepare=npv._gcov_valid, cache_dir=tmp_path / "c", cache_key="G_BATCH")
+    assert all(sz <= 4 for sz in batch_sizes) and len(batch_sizes) >= 3
+    assert seen_calls["persisted_after_batch1"] == 4        # batch 1 saved before batch 2 failed
+    for k in want:
+        assert np.allclose(got[k], want[k], equal_nan=True, rtol=1e-6)
+
+
 def test_search_keeps_latest_version_and_groups_frames(monkeypatch):
     feats = []
     for fid, t, frame in [("NISAR_L3_PR_SME2_026_042_D_068_X_001", "2026-07-23T02:55:30Z", 68),

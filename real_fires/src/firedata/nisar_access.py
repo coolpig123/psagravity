@@ -155,8 +155,10 @@ def granule_url(file_id: str) -> str:
     return feats[0]["properties"]["url"]
 
 
-READ_TIMEOUT_S = 120      # a byte-range request with no data for this long is abandoned (then retried)
+READ_TIMEOUT_S = 40       # a byte-range request with no data for this long is abandoned (then retried)
 READ_ATTEMPTS = 3
+CHUNK_BATCH_SIZE = 8      # fetch missing chunks in small batches and persist each batch right away
+BATCH_ATTEMPTS = 3
 
 
 @functools.lru_cache(maxsize=1)
@@ -440,7 +442,9 @@ def _meta(f_open: Callable[[], h5py.File], group: str, datasets: list[str], chun
     meta[group] = m
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(meta))
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta))
+        tmp.replace(path)
     return m
 
 
@@ -515,22 +519,54 @@ def _remote_window(url: str, group: str, datasets: list[str], grid: TargetGrid, 
             g = f_open()[group]
             infos = [g[k].id.get_chunk_info_by_coord((r, c)) for k, r, c, _ in missing]
             log.debug("%s: chunk offsets %.1f s", Path(url).name[:40], time.perf_counter() - t0)
-            stored = [i for i, info in enumerate(infos) if info.byte_offset is not None and info.size]
-            fs, read_url, _ = _remote(url)
-            blobs = fs.cat_ranges(
-                [read_url] * len(stored), [infos[i].byte_offset for i in stored],
-                [infos[i].byte_offset + infos[i].size for i in stored], on_error="raise") if stored else []
-            log.debug("%s: fetched %.1f MB %.1f s", Path(url).name[:40], sum(map(len, blobs)) / 2**20,
-                      time.perf_counter() - t0)
-            data = dict(zip(stored, blobs))
-            for i, (k, r, c, p) in enumerate(missing):
-                mask, raw = (int(infos[i].filter_mask), bytes(data[i])) if i in data else (_UNALLOCATED, b"")
-                if i in data and len(raw) != infos[i].size:
-                    raise ConnectionError(f"short read of a NISAR chunk ({len(raw)} of {infos[i].size} bytes)")
+
+            def save_chunk(k: str, r: int, c: int, p: Path | None, mask: int, raw: bytes) -> None:
                 chunks[(k, r, c)] = (mask, raw)
                 if p is not None:
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(mask.to_bytes(4, "little") + raw)
+                    tmp = p.with_suffix(".tmp")
+                    tmp.write_bytes(mask.to_bytes(4, "little") + raw)
+                    tmp.replace(p)
+
+            stored = []
+            for i, info in enumerate(infos):
+                if info.byte_offset is not None and info.size:
+                    stored.append(i)
+                else:
+                    k, r, c, p = missing[i]
+                    save_chunk(k, r, c, p, _UNALLOCATED, b"")
+
+            total_bytes = 0
+            if stored:
+                fs, read_url, _ = _remote(url)
+                for b0 in range(0, len(stored), CHUNK_BATCH_SIZE):
+                    batch = stored[b0:b0 + CHUNK_BATCH_SIZE]
+                    starts = [infos[i].byte_offset for i in batch]
+                    ends = [infos[i].byte_offset + infos[i].size for i in batch]
+                    for attempt in range(1, BATCH_ATTEMPTS + 1):
+                        try:
+                            blobs = fs.cat_ranges([read_url] * len(batch), starts, ends, on_error="raise")
+                            for i, raw in zip(batch, blobs):
+                                if len(raw) != infos[i].size:
+                                    raise ConnectionError(
+                                        f"short read of a NISAR chunk ({len(raw)} of {infos[i].size} bytes)")
+                            break
+                        except Exception as e:
+                            if not _is_network_error(e) or attempt == BATCH_ATTEMPTS:
+                                raise
+                            log.warning("NISAR chunk batch %d/%d of %s failed (%s), retry %d/%d",
+                                        b0 // CHUNK_BATCH_SIZE + 1,
+                                        (len(stored) + CHUNK_BATCH_SIZE - 1) // CHUNK_BATCH_SIZE,
+                                        Path(url).name, e, attempt, BATCH_ATTEMPTS - 1)
+                            _reset_remote()
+                            fs, read_url, _ = _remote(url)
+                    for i, raw in zip(batch, blobs):
+                        raw_bytes = bytes(raw)
+                        total_bytes += len(raw_bytes)
+                        k, r, c, p = missing[i]
+                        save_chunk(k, r, c, p, int(infos[i].filter_mask), raw_bytes)
+            log.debug("%s: fetched %.1f MB %.1f s", Path(url).name[:40], total_bytes / 2**20,
+                      time.perf_counter() - t0)
         arrays = {}
         for k in datasets:
             dm = m["datasets"][k]
