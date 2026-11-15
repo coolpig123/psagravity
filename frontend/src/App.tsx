@@ -3,7 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
-import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
+import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, strideFor, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
@@ -162,7 +162,7 @@ function App() {
   const [windStatus, setWindStatus] = useState<WindStatus>({ state: 'idle' })
   const windRequest = useRef(0) // same as requestId, for the wind
   // The last wind request (on its way, answered or failed): its start time and the area it covers.
-  const windAsked = useRef<{ start: string; box: [number, number, number, number] } | null>(null)
+  const windAsked = useRef<{ start: string; box: [number, number, number, number]; stride: number } | null>(null)
   const windTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [viewTick, setViewTick] = useState(0) // +1 after each pan / zoom, so the wind can follow the view
 
@@ -345,15 +345,15 @@ function App() {
     }
   }, [prediction, loaded])
 
-  // Once the polygon is finished, fetch the MERRA-2 wind over the whole visible map for the start time (zoomed far
-  // out: a 30 x 20 deg area around the polygon). After a pan or zoom, fetch again only if the view leaves the area
-  // of the last request (answered, on its way or failed), so map resizes and small moves never start a new
-  // request; the old wind stays meanwhile. A new start time always fetches again. Drawing again or clearing
-  // removes it.
+  // The wind is always available (polygon or not): fetch the MERRA-2 wind over the whole visible map for the
+  // start time, at any zoom (coarser grid when zoomed far out). After a pan or zoom, fetch again only if the view
+  // leaves the area of the last request (answered, on its way or failed), or if zooming in deserves a finer grid,
+  // so map resizes and small moves never start a new request; the old wind stays meanwhile. A new start time
+  // always fetches again. Nothing is fetched while the wind is switched off.
   useEffect(() => {
     const map = mapRef.current
     const t = start.trim()
-    if (mode !== 'locked' || !t || !map || !loaded) {
+    if (!showWind || !t || !map || !loaded) {
       windRequest.current++
       clearTimeout(windTimer.current)
       windAsked.current = null
@@ -361,16 +361,19 @@ function App() {
       setWindStatus({ state: 'idle' })
       return
     }
-    const pts = pointsRef.current
-    const middle: [number, number] = [
-      pts.reduce((a, q) => a + q[0], 0) / pts.length,
-      pts.reduce((a, q) => a + q[1], 0) / pts.length,
-    ]
-    const box = viewBox(map, middle)
+    const box = viewBox(map)
+    const want = tileBox(box)
+    const wantStride = strideFor(want)
     const asked = windAsked.current
-    if (asked && asked.start === t && boxCovers(asked.box, box)) return
+    if (
+      asked &&
+      asked.start === t &&
+      boxCovers(asked.box, box) &&
+      (asked.stride <= wantStride || asked.box.every((x, k) => x === want[k]))
+    )
+      return
     const id = ++windRequest.current
-    windAsked.current = { start: t, box: tileBox(box) }
+    windAsked.current = { start: t, box: want, stride: wantStride }
     if (!asked || asked.start !== t) setWindStatus({ state: 'loading' })
     clearTimeout(windTimer.current) // a newer request replaces one not sent yet (typing a start time)
     windTimer.current = setTimeout(async () => {
@@ -389,7 +392,9 @@ function App() {
           throw new Error('the Python server is older than the website: stop npm run dev (Ctrl+C) and start it again')
         if (!res.ok) throw new Error(data?.error ?? `the server answered ${res.status}`)
         if (id !== windRequest.current) return
-        setWind(data as WindGrid)
+        const grid = data as WindGrid
+        if (windAsked.current && grid.stride) windAsked.current.stride = grid.stride
+        setWind(grid)
         setWindStatus({ state: 'ok' })
       } catch (err) {
         if (id !== windRequest.current) return
@@ -397,15 +402,15 @@ function App() {
         setWindStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
       }
     }, 400)
-  }, [mode, start, viewTick, loaded])
+  }, [showWind, start, viewTick, loaded])
 
   useEffect(() => {
     windLayer.current?.setData(wind)
   }, [wind, loaded])
 
   useEffect(() => {
-    windLayer.current?.setVisible(showWind && mode === 'locked')
-  }, [showWind, mode, loaded])
+    windLayer.current?.setVisible(showWind)
+  }, [showWind, loaded])
 
   // Clearing or redrawing the polygon removes the prediction and ignores one still on its way.
   const dropPrediction = () => {
@@ -436,15 +441,15 @@ function App() {
 
   const area = areaKm2(points)
 
-  // Wind at the middle of the polygon for the label (the grid mean if the polygon is outside the loaded area).
+  // Wind at the middle of the polygon for the label (none without a polygon, or if it is outside the loaded area).
   const windHere = (() => {
-    if (!wind || points.length === 0) return null
+    if (!wind || points.length < 3) return null
     const lng = points.reduce((a, p) => a + p[0], 0) / points.length
     const lat = points.reduce((a, p) => a + p[1], 0) / points.length
     const uv = sampleWind(wind, lng, lat)
-    if (!uv) return { speed: wind.mean_speed_ms, dir: wind.mean_dir_deg, where: 'mean of the loaded area' }
+    if (!uv) return null
     const dir = (((Math.atan2(-uv[0], -uv[1]) * 180) / Math.PI) + 360) % 360 // direction the wind comes from
-    return { speed: Math.hypot(uv[0], uv[1]), dir, where: 'at the polygon' }
+    return { speed: Math.hypot(uv[0], uv[1]), dir }
   })()
 
   // One-line hint for the next step, shown under the toolbar.
@@ -546,25 +551,25 @@ ${err instanceof Error ? err.message : err}`)
           <input type="checkbox" checked={showRegions} onChange={(e) => setShowRegions(e.target.checked)} />
           regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data
         </label>
-        {mode === 'locked' && (
-          <label className="regions wind">
-            <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
-            {windStatus.state === 'loading' && 'wind (loading MERRA-2…)'}
-            {windStatus.state === 'error' && (
-              <span className="wind-error" title={windStatus.message}>
-                wind: {windStatus.message}
-              </span>
-            )}
-            {windStatus.state === 'ok' && wind && windHere && (
-              <span
-                title={`MERRA-2 wind at 10 m ${windHere.where}, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)}, ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}
-              >
-                wind (MERRA-2): {windHere.speed.toFixed(1)} m/s from {compass(windHere.dir)}
-                <span className="wind-ramp" style={{ background: legendGradient() }} />
-              </span>
-            )}
-          </label>
-        )}
+        <label className="regions wind">
+          <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
+          {!showWind && 'wind (MERRA-2)'}
+          {showWind && windStatus.state === 'loading' && 'wind (loading MERRA-2…)'}
+          {showWind && windStatus.state === 'error' && (
+            <span className="wind-error" title={windStatus.message}>
+              wind: {windStatus.message}
+            </span>
+          )}
+          {showWind && windStatus.state === 'ok' && wind && (
+            <span
+              title={`MERRA-2 wind at 10 m, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)} (the Start time), ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}
+            >
+              wind (MERRA-2, {hourRange(wind.hour_start_utc)} UTC)
+              {windHere && `: ${windHere.speed.toFixed(1)} m/s from ${compass(windHere.dir)} at the polygon`}
+              <span className="wind-ramp" style={{ background: legendGradient() }} />
+            </span>
+          )}
+        </label>
       </div>
       <div className="panel">
         {predicting && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}

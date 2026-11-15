@@ -26,7 +26,16 @@ def test_grid_window_covers_box_with_one_cell_margin():
 
 def test_opendap_constraint():
     ce = m2.opendap_constraint(["U10M", "V10M"], slice(258, 262), slice(95, 98))
-    assert ce == "/U10M[0:1:23][258:1:261][95:1:97];/V10M[0:1:23][258:1:261][95:1:97];/lat[258:1:261];/lon[95:1:97];/time"
+    assert ce == ("/U10M[0:1:23][258:1:261][95:1:97];/V10M[0:1:23][258:1:261][95:1:97];/lat[258:1:261];"
+                  "/lon[95:1:97];/time[0:1:23]")
+    # one hour, every 3rd cell: the last index is the last one actually read
+    ce = m2.opendap_constraint(["U10M"], slice(0, 361, 3), slice(0, 576, 3), slice(21, 22))
+    assert ce == "/U10M[21:1:21][0:3:360][0:3:573];/lat[0:3:360];/lon[0:3:573];/time[21:1:21]"
+
+
+def test_wind_stride_divides_the_longitudes():
+    assert m2.wind_stride(150) == 1
+    assert m2.wind_stride(577) == 3 and m2.wind_stride(1000) == 6     # 576 % 6 == 0 (5 does not divide 576)
 
 
 def test_wind_direction_convention():
@@ -61,9 +70,10 @@ def fake_remote(monkeypatch):
                              "file": [f"MERRA2_400.tavg1_2d_slv_Nx.{d:%Y%m%d}.nc4" for d in days],
                              "data": None, "opendap": "https://example", "s3": None})
 
-    def read(granule, variables, lat_idx, lon_idx, out):
+    def read(granule, variables, lat_idx, lon_idx, out, hours=m2.ALL_HOURS):
         calls.append(granule["file"])
-        m2._tidy(fake_day(granule["date"], variables, lat_idx, lon_idx), variables).to_netcdf(out, engine="h5netcdf")
+        day = fake_day(granule["date"], variables, lat_idx, lon_idx).isel(time=hours)
+        m2._tidy(day, variables).to_netcdf(out, engine="h5netcdf")
 
     monkeypatch.setattr(m2, "search_granules", search)
     monkeypatch.setattr(m2, "_read_opendap", read)
@@ -102,10 +112,19 @@ def test_unknown_variable(tmp_path):
 
 
 def test_wind_grid_json(fake_remote, tmp_path):
-    w = m2.wind_grid(BUG_BBOX, "2026-08-09T21:40Z", margin_deg=1.0, cache_dir=tmp_path)
+    w = m2.wind_grid(BUG_BBOX, "2026-08-09T21:40Z", cache_dir=tmp_path)
     assert w["hour_start_utc"] == "2026-08-09T21:00:00+00:00" and w["time_utc"] == "2026-08-09T21:30:00+00:00"
     assert len(w["u"]) == len(w["lat"]) and len(w["u"][0]) == len(w["lon"])
     assert w["lat"] == sorted(w["lat"]) and w["lon"] == sorted(w["lon"])
     assert w["mean_speed_ms"] == 5.0 and w["mean_dir_deg"] == 270.0
     with pytest.raises(LookupError):
         m2.wind_grid(BUG_BBOX, "2026-08-10T12:00Z", cache_dir=tmp_path)   # the unpublished day
+
+
+def test_wind_grid_whole_world_wraps(fake_remote, tmp_path):
+    w = m2.wind_grid((-180, -90, 180, 90), "2026-08-09T21:00Z", cache_dir=tmp_path)
+    assert w["global_lon"] and w["stride"] == 3
+    assert len(w["lat"]) <= m2.WIND_MAX_CELLS and len(w["lon"]) <= m2.WIND_MAX_CELLS + 1
+    assert w["lon"][0] == -180 and w["lon"][-1] == 180                        # first column repeated at +180
+    assert np.allclose(np.diff(w["lon"]), 3 * 0.625)                           # evenly spaced across the date line
+    assert w["u"][0][0] == w["u"][0][-1] and len(w["u"][0]) == len(w["lon"])

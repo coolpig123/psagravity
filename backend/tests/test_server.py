@@ -78,8 +78,10 @@ def test_wind_view_bbox():
     # snapped out to 5 deg tiles, so small pans and zooms reuse the same data
     assert server.wind_view_bbox([-120.3, 39.5, -119.8, 39.9]) == (-125.0, 35.0, -115.0, 40.0)
     assert server.wind_view_bbox([-121, 37, -118, 41]) == (-125.0, 35.0, -115.0, 45.0)
-    assert server.wind_view_bbox([-190, -95, -170, -80]) == (-180.0, -90.0, -170.0, -80.0)   # clamped to the world
-    for bad in (None, [1, 2, 3], ["a", 0, 1, 1], [10, 0, -10, 1], [-150, 0, -100, 10]):     # last: too wide
+    assert server.wind_view_bbox([-150, 0, -100, 10]) == (-150.0, 0.0, -100.0, 10.0)        # any size
+    assert server.wind_view_bbox([-540, -95, 540, 95]) == (-180.0, -90.0, 180.0, 90.0)      # world copies
+    assert server.wind_view_bbox([170, -20, 190, -10]) == (-180.0, -20.0, 180.0, -10.0)     # across the date line
+    for bad in (None, [1, 2, 3], ["a", 0, 1, 1], [10, 0, -10, 1], [0, 5, 1, 5]):
         with pytest.raises(ValueError):
             server.wind_view_bbox(bad)
 
@@ -89,18 +91,19 @@ def test_wind_endpoint(post, monkeypatch):
     merra2 = pytest.importorskip("firedata.merra2")
     seen = []
 
-    def fake_wind_grid(bbox, time, margin_deg):
-        seen.append((bbox, str(time), margin_deg))
+    def fake_wind_grid(bbox, time):
+        seen.append((bbox, str(time)))
         if time.year == 2030:
             raise LookupError("MERRA-2 M2T1NXSLV: no granule (not published yet?)")
         return {"time_utc": "2026-08-09T21:30:00+00:00", "lat": [39.5, 40.0], "lon": [-120.625, -120.0],
-                "u": [[1, 1], [1, 1]], "v": [[0, 0], [0, 0]], "mean_speed_ms": 1.0, "mean_dir_deg": 270.0}
+                "u": [[1, 1], [1, 1]], "v": [[0, 0], [0, 0]], "mean_speed_ms": 1.0, "mean_dir_deg": 270.0,
+                "stride": 1}
     monkeypatch.setattr(merra2, "wind_grid", fake_wind_grid)
 
     view = [-120.3, 39.5, -119.8, 39.9]
     status, out = post("/api/wind", {"bbox": view, "start": "2026-08-09T21:00Z"})
     assert status == 200 and out["mean_dir_deg"] == 270.0 and out["bbox"] == [-125.0, 35.0, -115.0, 40.0]
-    assert seen == [((-125.0, 35.0, -115.0, 40.0), "2026-08-09 21:00:00+00:00", server.WIND_EDGE_DEG)]
+    assert seen == [((-125.0, 35.0, -115.0, 40.0), "2026-08-09 21:00:00+00:00")]
     status, out = post("/api/wind", {"bbox": view, "start": "2030-01-01T00:00Z"})
     assert status == 404 and out["no_data"] is True
     status, out = post("/api/wind", {"bbox": view})

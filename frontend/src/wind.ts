@@ -1,8 +1,9 @@
 // Animated wind on the map, in the style of earth.nullschool.net (Cameron Beccario, MIT licence):
 // a colour overlay of wind speed under the map's own layers, and thousands of particles drifting with the
 // wind on a canvas above it, leaving short fading trails, brighter where the wind is stronger.
-// The wind is a u/v grid (MERRA-2, ~55 km cells) from POST /api/wind covering the whole visible map (the server
-// widens the view to 5 deg tiles, so small pans and zooms need no new data); it is bilinearly interpolated.
+// The wind is a u/v grid (MERRA-2, ~55 km cells; every k-th cell when zoomed far out) from POST /api/wind covering
+// the whole visible map at any zoom, up to the whole world (the server widens the view to 5 deg tiles, so small
+// pans and zooms need no new data); it is bilinearly interpolated.
 import * as maplibregl from 'maplibre-gl'
 
 // Answer of POST /api/wind (firedata.merra2.wind_grid).
@@ -19,26 +20,19 @@ export type WindGrid = {
   source: string
   resolution: string
   bbox?: [number, number, number, number] // [west, south, east, north] where the wind is complete (no faded edge)
+  stride?: number // every stride-th MERRA-2 cell (1 = full resolution)
+  global_lon?: boolean // all longitudes: the grid wraps around the world (last column = first one + 360)
 }
 
-// Zoomed far out, only part of the view gets wind (at most this many degrees), to keep downloads small.
-export const MAX_VIEW_LON_DEG = 30
-export const MAX_VIEW_LAT_DEG = 20
+const MAX_MERCATOR_LAT = 85.0511 // the map shows no more than this
 
-// The visible map as [west, south, east, north], clamped to the world. If it is wider than MAX_VIEW_* degrees,
-// it is cut to that size around `focus` (the polygon, kept inside the view) or else the middle of the view.
-export function viewBox(map: maplibregl.Map, focus?: [number, number]): [number, number, number, number] {
-  const b = map.getBounds()
-  let [w, e] = [Math.max(-180, b.getWest()), Math.min(180, b.getEast())]
-  let [s, n] = [Math.max(-85, b.getSouth()), Math.min(85, b.getNorth())]
-  // centre c, clamped so the cut stays inside [lo, hi]
-  const cut = (lo: number, hi: number, c: number, span: number): [number, number] => {
-    const mid = Math.min(Math.max(c, lo + span / 2), hi - span / 2)
-    return [mid - span / 2, mid + span / 2]
-  }
-  if (e - w > MAX_VIEW_LON_DEG) [w, e] = cut(w, e, focus ? focus[0] : (w + e) / 2, MAX_VIEW_LON_DEG)
-  if (n - s > MAX_VIEW_LAT_DEG) [s, n] = cut(s, n, focus ? focus[1] : (s + n) / 2, MAX_VIEW_LAT_DEG)
-  return [w, s, e, n]
+// The visible map as [west, south, east, north]. A view showing the date line or copies of the world (zoomed far
+// out) asks for all longitudes; the server does the same.
+export function viewBox(map: maplibregl.Map): [number, number, number, number] {
+  const bounds = map.getBounds()
+  let [w, e] = [bounds.getWest(), bounds.getEast()]
+  if (w < -180 || e > 180) [w, e] = [-180, 180]
+  return [w, Math.max(-MAX_MERCATOR_LAT, bounds.getSouth()), e, Math.min(MAX_MERCATOR_LAT, bounds.getNorth())]
 }
 
 type Box = [number, number, number, number]
@@ -55,6 +49,15 @@ export function tileBox([w, s, e, n]: Box): Box {
     Math.min(180, Math.ceil(e / t) * t),
     Math.min(90, Math.ceil(n / t) * t),
   ]
+}
+
+// The grid step the server will use for a box (firedata.merra2.wind_stride: at most 200 cells per side, a step
+// that divides the 576 MERRA-2 longitudes). Only used to know when zooming in deserves a finer grid.
+export function strideFor([w, s, e, n]: Box): number {
+  const cells = Math.max((n - s) / 0.5, (e - w) / 0.625) + 3
+  const need = Math.max(1, Math.ceil(cells / 200))
+  for (let k = need; k <= 576; k++) if (576 % k === 0) return k
+  return 576
 }
 
 // True if `outer` contains all of `inner`.
@@ -129,11 +132,17 @@ type Particle = { x: number; y: number; age: number }
 const mercY = (lat: number) => 0.5 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / (2 * Math.PI)
 const latOfMercY = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI
 
+// Longitude moved into the grid's 360 degrees when the grid goes around the world (copies of the world, date line).
+function wrapLng(g: WindGrid, lng: number): number {
+  return g.global_lon ? g.lon[0] + ((((lng - g.lon[0]) % 360) + 360) % 360) : lng
+}
+
 // Bilinear u, v at (lng, lat), or null outside the grid / where it has no data.
 export function sampleWind(g: WindGrid, lng: number, lat: number): [number, number] | null {
   const nLat = g.lat.length
   const nLon = g.lon.length
   if (nLat < 2 || nLon < 2) return null
+  lng = wrapLng(g, lng)
   const fi = ((lat - g.lat[0]) / (g.lat[nLat - 1] - g.lat[0])) * (nLat - 1)
   const fj = ((lng - g.lon[0]) / (g.lon[nLon - 1] - g.lon[0])) * (nLon - 1)
   if (!(fi >= 0 && fi <= nLat - 1 && fj >= 0 && fj <= nLon - 1)) return null
@@ -147,10 +156,13 @@ export function sampleWind(g: WindGrid, lng: number, lat: number): [number, numb
 }
 
 // Distance (in grid cells) from (lng, lat) to the nearest edge of the grid.
+// A grid around the whole world has no east / west edge.
 function edgeCells(g: WindGrid, lng: number, lat: number): number {
   const fi = ((lat - g.lat[0]) / (g.lat[g.lat.length - 1] - g.lat[0])) * (g.lat.length - 1)
+  const toLat = Math.min(fi, g.lat.length - 1 - fi)
+  if (g.global_lon) return Math.max(0, toLat)
   const fj = ((lng - g.lon[0]) / (g.lon[g.lon.length - 1] - g.lon[0])) * (g.lon.length - 1)
-  return Math.max(0, Math.min(fi, g.lat.length - 1 - fi, fj, g.lon.length - 1 - fj))
+  return Math.max(0, Math.min(toLat, fj, g.lon.length - 1 - fj))
 }
 
 export class WindLayer {
@@ -208,7 +220,9 @@ export class WindLayer {
 
   private addOverlay(g: WindGrid) {
     const [w, e] = [g.lon[0], g.lon[g.lon.length - 1]]
-    const [s, n] = [g.lat[0], g.lat[g.lat.length - 1]]
+    // The map cannot show the poles (Web Mercator), so the image stops where the map does.
+    const s = Math.max(g.lat[0], -MAX_MERCATOR_LAT)
+    const n = Math.min(g.lat[g.lat.length - 1], MAX_MERCATOR_LAT)
     const W = 512
     const H = 512
     const c = document.createElement('canvas')
@@ -303,13 +317,13 @@ export class WindLayer {
     this.particles = []
     const g = this.grid
     if (!g || !this.visible || this.moving) return
-    // Where the wind grid is on screen.
-    const a = this.map.project([g.lon[0], g.lat[g.lat.length - 1]])
-    const b = this.map.project([g.lon[g.lon.length - 1], g.lat[0]])
+    // Where the wind grid is on screen (a grid around the world covers the full width, copies included).
+    const a = this.map.project([g.lon[0], Math.min(g.lat[g.lat.length - 1], MAX_MERCATOR_LAT)])
+    const b = this.map.project([g.lon[g.lon.length - 1], Math.max(g.lat[0], -MAX_MERCATOR_LAT)])
     this.area = {
-      x0: Math.max(0, a.x),
+      x0: g.global_lon ? 0 : Math.max(0, a.x),
       y0: Math.max(0, a.y),
-      x1: Math.min(this.view.w, b.x),
+      x1: g.global_lon ? this.view.w : Math.min(this.view.w, b.x),
       y1: Math.min(this.view.h, b.y),
     }
     const px = Math.max(0, this.area.x1 - this.area.x0) * Math.max(0, this.area.y1 - this.area.y0)
