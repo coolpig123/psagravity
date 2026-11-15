@@ -1,0 +1,10 @@
+{
+ "start_utc": "2026-08-10 02:00:00+00:00",
+ "start_area_ha": 3378.0,
+ "start_scenes": [
+  "RCM SC30MCPA 2026-08-10 01:34 vs 2026-08-02 (RL rise >= 1.0 dB)"
+ ],
+ "hours_per_step": 2.0,
+ "threshold": 0.9,
+ "runs": 200
+}
