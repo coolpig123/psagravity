@@ -126,6 +126,7 @@ def params_of(theta: dict) -> AlexandridisParams:
     b = AlexandridisParams()
     return dataclasses.replace(
         b, p0=theta["p0"], c1=theta["c1"], c2=theta["c2"], a=theta["a"], b_emc=theta["b_emc"],
+        gust_weight=0.0,                 # score() uses the mean wind for P_wind (gusts only loft firebrands)
         veg_by_lifeform={1: 0.4, 2: theta["v_shrub"], 3: theta["v_grass"]},
         diagonal_factor=theta["diagonal_factor"],
         den_sparse=theta["den_sparse"], den_dense=theta["den_dense"],

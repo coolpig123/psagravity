@@ -106,8 +106,12 @@ class AlexandridisParams:
 
     @classmethod
     def calibrated(cls) -> AlexandridisParams:
-        """Parameters jointly fitted with NISAR + VIIRS FRP on 57 FEDS 12 h segments across 4 Western US fires."""
+        """Parameters jointly fitted with NISAR + VIIRS FRP on 57 FEDS 12 h segments across 4 Western US fires.
+
+        gust_weight = 0: the fit (calibrate_search.py) computed P_wind from the mean wind; gusts only loft
+        firebrands there (spot_use_gust). With the default gust_weight the wind would be stronger than fitted."""
         return cls(
+            gust_weight=0.0,
             p0=0.93, c1=0.118, c2=0.023, a=0.11, b_emc=0.002,
             veg_by_lifeform={1: 0.4, 2: 0.1, 3: 0.28},
             diagonal_factor=1.0,

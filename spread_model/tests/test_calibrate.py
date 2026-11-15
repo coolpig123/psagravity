@@ -59,6 +59,7 @@ def test_calibrated_preset_and_search_params():
     cal = AlexandridisParams.calibrated()
     p = params_of(CALIBRATED)
     assert cal.p0 == p.p0 and cal.c1 == p.c1 and cal.c2 == p.c2
+    assert cal.gust_weight == 0.0 and p.gust_weight == 0.0     # fitted on the mean wind, not gust-boosted
     assert cal.den_sparse == p.den_sparse and cal.den_dense == p.den_dense
     assert cal.sparse_below_pct == p.sparse_below_pct and cal.dense_from_pct == p.dense_from_pct
     assert cal.dry_dry == p.dry_dry and cal.dry_wet == p.dry_wet
