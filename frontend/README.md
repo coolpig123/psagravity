@@ -35,12 +35,14 @@ Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\se
 
 ## Wind
 
-After **Finish**, the whole map is covered with the wind at the **Start (UTC)** time, in the style of
+The wind is on from the moment the website opens, with or without a polygon: the whole map is covered with the wind
+at the **Start (UTC)** time, at any zoom up to the whole world, in the style of
 [earth.nullschool.net](https://earth.nullschool.net): colours = wind speed (0-20 m/s scale next to the toggle),
 moving white lines = particles carried by the wind. Pan or zoom and the wind follows the view (new data only when the
-view leaves the area already loaded, which is widened to 5° tiles). Zoomed far out, only a 30° x 20° area around the
-polygon gets wind, to keep downloads small. The **wind** checkbox (right of the regions checkbox) turns it off and
-on; changing the start time reloads it. The label gives the wind at the polygon; hover it for the hour and source.
+view leaves the area already loaded, which is widened to 5° tiles, or when zooming in deserves a finer grid: zoomed
+far out the server sends every 2nd-3rd MERRA-2 cell). The **wind** checkbox (right of the regions checkbox) turns it
+off and on; changing the start time reloads it. Once a polygon is drawn, the label also gives the wind at the
+polygon; hover it for the hour and source.
 
 The data is NASA **MERRA-2** 10 m wind (hourly means, ~55 km grid), read by the server (`POST /api/wind`,
 [firedata.merra2](../real_fires/src/firedata/merra2.py)) from GES DISC: only the area on screen, a few

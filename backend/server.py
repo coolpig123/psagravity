@@ -16,7 +16,7 @@ POST /api/predict   body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z", "ra
 
 POST /api/wind      body: {"bbox": [west, south, east, north], "start": "2026-08-09T21:00Z"}
                     MERRA-2 10 m wind (u, v on its ~55 km grid) of the hour containing "start", over the
-                    map view (widened to 5 deg tiles), for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
+                    map view at any zoom (widened to 5 deg tiles, coarser when zoomed out), for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
                     and the Earthdata login in real_fires/.env. 404 = MERRA-2 has no data for that time yet.
 """
 
@@ -131,28 +131,24 @@ def run_predict(body: dict) -> dict:
     return out
 
 
-# The wind fills the visible map (POST /api/wind with the map's bbox). The box is widened to a 5 deg tile grid, so
-# panning and zooming near the same place reuse the same data, plus a bit more than one MERRA-2 cell (0.625 deg),
-# so the faded edge of the wind area stays outside the view. Views wider than WIND_MAX_SPAN_DEG are refused
-# (the website asks for at most 30 x 20 deg, the middle of a zoomed-out view).
+# The wind fills the visible map at any zoom (POST /api/wind with the map's bbox). The box is widened to a 5 deg
+# tile grid, so panning and zooming near the same place reuse the same data. A view that shows the date line or
+# copies of the world asks for all longitudes. Large views get a coarser grid (firedata.merra2.wind_grid).
 WIND_TILE_DEG = 5.0
-WIND_EDGE_DEG = 0.7
-WIND_MAX_SPAN_DEG = 40.0
 
 
 def wind_view_bbox(bbox) -> tuple[float, float, float, float]:
-    """The map view [west, south, east, north] -> the box to read: clamped to the world, snapped out to the tiles.
-    ValueError if malformed or too wide."""
+    """The map view [west, south, east, north] -> the box to read: snapped out to the tiles, all longitudes if
+    the view crosses the date line. ValueError if malformed."""
     try:
         w, s, e, n = (float(v) for v in bbox)
     except (TypeError, ValueError) as err:
         raise ValueError(f"bbox: [west, south, east, north] in degrees is required ({err})") from None
-    w, e = max(-180.0, w), min(180.0, e)
+    if not (w < e and s < n) or any(map(math.isnan, (w, s, e, n))):
+        raise ValueError(f"bbox: west < east and south < north are required, got {bbox}")
+    if w < -180 or e > 180:
+        w, e = -180.0, 180.0
     s, n = max(-90.0, s), min(90.0, n)
-    if not (w < e and s < n):
-        raise ValueError(f"bbox: empty or crosses the antimeridian: {bbox}")
-    if e - w > WIND_MAX_SPAN_DEG or n - s > WIND_MAX_SPAN_DEG:
-        raise ValueError(f"bbox: at most {WIND_MAX_SPAN_DEG:g} deg wide, got {e - w:.1f} x {n - s:.1f}")
     t = WIND_TILE_DEG
     return (max(-180.0, math.floor(w / t) * t), max(-90.0, math.floor(s / t) * t),
             min(180.0, math.ceil(e / t) * t), min(90.0, math.ceil(n / t) * t))
@@ -167,10 +163,10 @@ def run_wind(body: dict) -> dict:
     except (KeyError, ValueError, TypeError) as e:
         raise ValueError(f"start: an ISO time in UTC is required ({e})") from None
     t0 = time.time()
-    out = wind_grid(bbox, start, margin_deg=WIND_EDGE_DEG)
+    out = wind_grid(bbox, start)
     out["bbox"] = list(bbox)   # where the wind is complete (without the faded edge)
-    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells over {bbox} "
-          f"({time.time() - t0:.1f} s)", flush=True)
+    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells (every {out['stride']}) "
+          f"over {bbox} ({time.time() - t0:.1f} s)", flush=True)
     return out
 
 

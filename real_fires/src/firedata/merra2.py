@@ -88,9 +88,9 @@ def grid_window(bbox: tuple[float, float, float, float], margin_deg: float = 0.0
 
 
 def cell_centres(lat_idx: slice, lon_idx: slice) -> tuple[np.ndarray, np.ndarray]:
-    """Latitudes and longitudes (degrees) of the cells in the window."""
-    return (LAT0 + DLAT * np.arange(lat_idx.start, lat_idx.stop),
-            LON0 + DLON * np.arange(lon_idx.start, lon_idx.stop))
+    """Latitudes and longitudes (degrees) of the cells in the window (every step-th cell if the slices have a step)."""
+    return (LAT0 + DLAT * np.arange(lat_idx.start, lat_idx.stop, lat_idx.step or 1),
+            LON0 + DLON * np.arange(lon_idx.start, lon_idx.stop, lon_idx.step or 1))
 
 
 # ---- search (Earthdata Search / CMR, no login needed) -----------------------------------------
@@ -157,19 +157,29 @@ def _token() -> str:
 
 # ---- read one day ----------------------------------------------------------------------------
 
-def opendap_constraint(variables, lat_idx: slice, lon_idx: slice) -> str:
+ALL_HOURS = slice(0, 24)
+
+
+def _dap(sl: slice) -> str:
+    """slice(start, stop, step) -> DAP "[start:step:last]" (last = the last index actually included)."""
+    step = sl.step or 1
+    last = sl.start + ((sl.stop - 1 - sl.start) // step) * step
+    return f"[{sl.start}:{step}:{last}]"
+
+
+def opendap_constraint(variables, lat_idx: slice, lon_idx: slice, hours: slice = ALL_HOURS) -> str:
     """DAP4 constraint expression for `variables` (time, lat, lon) in the window, plus the coordinates."""
-    la = f"[{lat_idx.start}:1:{lat_idx.stop - 1}]"
-    lo = f"[{lon_idx.start}:1:{lon_idx.stop - 1}]"
-    parts = [f"/{v}[0:1:23]{la}{lo}" for v in variables] + [f"/lat{la}", f"/lon{lo}", "/time"]
+    la, lo = _dap(lat_idx), _dap(lon_idx)
+    parts = [f"/{v}{_dap(hours)}{la}{lo}" for v in variables] + [f"/lat{la}", f"/lon{lo}", f"/time{_dap(hours)}"]
     return ";".join(parts)
 
 
-def _read_opendap(granule: pd.Series, variables, lat_idx: slice, lon_idx: slice, out: Path) -> None:
+def _read_opendap(granule: pd.Series, variables, lat_idx: slice, lon_idx: slice, out: Path,
+                  hours: slice = ALL_HOURS) -> None:
     if not granule.get("opendap"):
         raise Merra2AccessError(f"{granule['file']}: no OPeNDAP link in CMR")
     r = requests.get(granule["opendap"] + ".dap.nc4",
-                     params={"dap4.ce": opendap_constraint(variables, lat_idx, lon_idx)},
+                     params={"dap4.ce": opendap_constraint(variables, lat_idx, lon_idx, hours)},
                      headers={"Authorization": f"Bearer {_token()}"}, timeout=300)
     if r.status_code in (401, 403):
         raise Merra2AccessError(
@@ -184,7 +194,8 @@ def _read_opendap(granule: pd.Series, variables, lat_idx: slice, lon_idx: slice,
     ds.to_netcdf(out, engine="h5netcdf")
 
 
-def _read_earthaccess(granule: pd.Series, variables, lat_idx: slice, lon_idx: slice, out: Path) -> None:
+def _read_earthaccess(granule: pd.Series, variables, lat_idx: slice, lon_idx: slice, out: Path,
+                      hours: slice = ALL_HOURS) -> None:
     import earthaccess
     _token()
     results = earthaccess.search_data(short_name=SHORT_NAME, version=VERSION,
@@ -193,7 +204,7 @@ def _read_earthaccess(granule: pd.Series, variables, lat_idx: slice, lon_idx: sl
         raise Merra2AccessError(f"earthaccess found no granule {granule['file']}")
     (f,) = earthaccess.open(results)
     with xr.open_dataset(f, engine="h5netcdf") as ds:
-        ds = _tidy(ds[list(variables)].isel(lat=lat_idx, lon=lon_idx), variables).load()
+        ds = _tidy(ds[list(variables)].isel(time=hours, lat=lat_idx, lon=lon_idx), variables).load()
     ds.to_netcdf(out, engine="h5netcdf")
 
 
@@ -206,28 +217,32 @@ def _tidy(ds: xr.Dataset, variables) -> xr.Dataset:
     return ds
 
 
-def _cache_name(granule: pd.Series, lat_idx: slice, lon_idx: slice, variables) -> str:
+def _cache_name(granule: pd.Series, lat_idx: slice, lon_idx: slice, variables, hours: slice = ALL_HOURS) -> str:
     tag = "-".join(sorted(variables))
+    step = lat_idx.step or 1
+    extra = (f"_s{step}" if step > 1 else "") + (f"_h{hours.start:02d}-{hours.stop - 1:02d}" if hours != ALL_HOURS else "")
     return (f"{Path(granule['file']).stem}_lat{lat_idx.start}-{lat_idx.stop - 1}"
-            f"_lon{lon_idx.start}-{lon_idx.stop - 1}_{tag}.nc")
+            f"_lon{lon_idx.start}-{lon_idx.stop - 1}{extra}_{tag}.nc")
 
 
 def fetch_day(granule: pd.Series, lat_idx: slice, lon_idx: slice, variables=DEFAULT_VARIABLES,
-              cache_dir: Path | None = None, method: str = "opendap") -> Path:
-    """The window of one daily granule as a small netCDF file in the cache (read remotely once)."""
+              cache_dir: Path | None = None, method: str = "opendap", hours: slice = ALL_HOURS) -> Path:
+    """The window of one daily granule as a small netCDF file in the cache (read remotely once).
+
+    `hours` picks hours of the day (default all 24); slices with a step read every step-th cell (coarser)."""
     unknown = set(variables) - set(VARIABLES)
     if unknown:
         raise ValueError(f"unknown MERRA-2 variables {sorted(unknown)}; choose from {list(VARIABLES)}")
     cache_dir = Path(cache_dir or CACHE_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / _cache_name(granule, lat_idx, lon_idx, variables)
+    out = cache_dir / _cache_name(granule, lat_idx, lon_idx, variables, hours)
     if out.exists():
         return out
     readers = {"opendap": _read_opendap, "earthaccess": _read_earthaccess}
     if method not in readers:
         raise ValueError(f"method must be one of {list(readers)}")
     log.info("MERRA-2 %s via %s", granule["file"], method)
-    readers[method](granule, variables, lat_idx, lon_idx, out)
+    readers[method](granule, variables, lat_idx, lon_idx, out, hours)
     return out
 
 
@@ -316,39 +331,67 @@ def point_series(ds: xr.Dataset, lat: float, lon: float) -> pd.DataFrame:
 WIND_VARIABLES = ("U10M", "V10M")
 
 
-def wind_grid(bbox: tuple[float, float, float, float], time, margin_deg: float = 1.5,
-              cache_dir: Path | None = None, method: str = "opendap") -> dict:
-    """10 m wind of the MERRA-2 hour that contains `time`, on the cells around bbox + margin, as plain JSON.
+WIND_MAX_CELLS = 200      # at most this many cells per side in one wind_grid answer (coarser when zoomed out)
+WIND_EDGE_CELLS = 1.2     # extra cells around the box, so the faded edge on the map stays outside it
 
+
+def wind_stride(n_cells: int, max_cells: int = WIND_MAX_CELLS) -> int:
+    """Read every k-th cell so that n_cells -> at most max_cells. k divides the 576 longitudes, so a global
+    grid stays evenly spaced across the date line."""
+    need = max(1, math.ceil(n_cells / max_cells))
+    return next(k for k in range(need, NLON + 1) if NLON % k == 0)
+
+
+def wind_grid(bbox: tuple[float, float, float, float], time, *, max_cells: int = WIND_MAX_CELLS,
+              cache_dir: Path | None = None, method: str = "opendap") -> dict:
+    """10 m wind of the MERRA-2 hour that contains `time`, over bbox (any size up to the whole world), as JSON.
+
+    Only that hour is read, and for large boxes only every k-th cell (`stride`), so the answer stays small
+    (<= max_cells per side). Over all longitudes the first column is repeated at +180, so the grid wraps.
     {"time_utc", "hour_start_utc", "lat": [south -> north], "lon": [west -> east], "u", "v": [lat][lon] m/s,
-     "speed_max", "mean_speed_ms", "mean_dir_deg", "source", "resolution"}. LookupError if MERRA-2 has no data
-    for that day yet (published ~2-6 weeks after the month ends).
+     "stride", "global_lon", "speed_max", "mean_speed_ms", "mean_dir_deg", "source", "resolution"}.
+    LookupError if MERRA-2 has no data for that day yet (published ~2-6 weeks after the month ends).
     """
     t = _utc(time)
     hour = t.floor("h")
-    ds = open_box(bbox, hour, hour + pd.Timedelta(hours=1), WIND_VARIABLES, margin_deg=margin_deg,
-                  cache_dir=cache_dir, method=method, derived=False)
-    if ds.sizes.get("time", 0) == 0:
-        raise LookupError(f"MERRA-2 has no data for {hour:%Y-%m-%d %H:%M} UTC yet")
-    one = ds.isel(time=0).sortby("lat").sortby("lon")
+    lat0, lon0 = grid_window(bbox)
+    stride = wind_stride(max(lat0.stop - lat0.start, lon0.stop - lon0.start), max_cells)
+    lat_idx, lon_idx = grid_window(bbox, margin_deg=WIND_EDGE_CELLS * stride * DLON)
+    global_lon = lon_idx.start == 0 and lon_idx.stop == NLON
+    lat_idx = slice(lat_idx.start, lat_idx.stop, stride)
+    lon_idx = slice(lon_idx.start, lon_idx.stop, stride)
+    day = hour.normalize()
+    granules = search_granules(day, day + pd.Timedelta(days=1))
+    if granules.empty:
+        raise LookupError(f"MERRA-2 has no data for {hour:%Y-%m-%d} yet (not published?)")
+    f = fetch_day(granules.iloc[0], lat_idx, lon_idx, WIND_VARIABLES, cache_dir, method,
+                  hours=slice(hour.hour, hour.hour + 1))
+    with xr.open_dataset(f, engine="h5netcdf") as ds:
+        one = ds.isel(time=0).sortby("lat").sortby("lon").load()
     u, v = one.U10M.values.astype(float), one.V10M.values.astype(float)
+    lat, lon = one.lat.values.astype(float), one.lon.values.astype(float)
+    if global_lon:   # repeat the first column at +180: the grid wraps around the world
+        u, v = np.concatenate([u, u[:, :1]], axis=1), np.concatenate([v, v[:, :1]], axis=1)
+        lon = np.append(lon, lon[0] + 360.0)
     ok = np.isfinite(u) & np.isfinite(v)
     if not ok.any():
         raise LookupError(f"MERRA-2 wind is missing at {hour:%Y-%m-%d %H:%M} UTC")
-    speed = np.hypot(u, v)
     _, mean_dir = wind_speed_dir(u[ok].mean(), v[ok].mean())
     r = lambda a: np.where(np.isfinite(a), np.round(a, 2), 0.0).tolist()  # noqa: E731
     return {
         "time_utc": pd.Timestamp(one.time.values).tz_localize("UTC").isoformat(),
         "hour_start_utc": hour.isoformat(),
-        "lat": np.round(one.lat.values.astype(float), 4).tolist(),
-        "lon": np.round(one.lon.values.astype(float), 4).tolist(),
+        "lat": np.round(lat, 4).tolist(),
+        "lon": np.round(lon, 4).tolist(),
         "u": r(u), "v": r(v),
-        "speed_max": round(float(np.nanmax(speed)), 2),
+        "stride": stride,
+        "global_lon": bool(global_lon),
+        "speed_max": round(float(np.nanmax(np.hypot(u, v))), 2),
         "mean_speed_ms": round(float(np.hypot(u[ok].mean(), v[ok].mean())), 2),
         "mean_dir_deg": round(float(mean_dir), 1),
         "source": f"MERRA-2 {SHORT_NAME} 10 m wind (NASA GMAO)",
-        "resolution": "0.5 deg x 0.625 deg (~55 km), hourly mean",
+        "resolution": ("0.5 deg x 0.625 deg (~55 km), hourly mean" if stride == 1 else
+                       f"every {stride}th MERRA-2 cell ({0.5 * stride:g} x {0.625 * stride:g} deg), hourly mean"),
     }
 
 
