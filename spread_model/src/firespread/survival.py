@@ -77,22 +77,21 @@ HORIZONS_H = (6, 12, 24, 48)
 
 # features: same code for training and for the website, so they always match
 FEATURES = ("path_steps", "path_len_m", "path_up_m", "path_down_m", "path_wind_along_ms", "path_p_veg",
-            "barrier_dist_m", "dist_m", "active_dist_m", "growth_m_h", "active_steps")
-# dist_m: straight-line distance to the burning area. active_dist_m: to its active part (result["active_front"]:
-# cells with a detection in the last ACTIVE_HOURS; the whole burning area when not given). growth_m_h: how fast
-# this fire has been growing (result.attrs["growth_m_h"], see growth_rate; NaN when unknown -> the model's fill).
-# active_steps: the fastest-path cost from the active front only; the path may cross the already burned area at the
-# calm, flat reference rate (the fire creeps along its own edge). Equal to path_steps when no active front is given.
-# Terms the anchor lines may use (ln of each); train() picks the set held out. path_steps carries the start-hour
-# wind and slope; barrier_dist_m is the plain distance around barriers, which the wind of one hour does not bend
-# (over 1-2 days the wind turns, and straight-line distance ranked the Bug Fire better than the wind-shaped cost).
-ANCHOR_CHOICES = (("path_steps",), ("barrier_dist_m",), ("path_steps", "barrier_dist_m"))
+            "active_steps")
+# active_steps: the fastest-path cost from the active front only (result["active_front"]: burning cells with a
+# detection in the last ACTIVE_HOURS). That path may cross the already burned area at the calm, flat reference rate
+# (the fire creeps along its own edge). Equal to path_steps when no active front is given.
+# (time terms, ever-burns terms) the two anchor lines may use (ln of each); train() picks the pair held out.
+ANCHOR_CHOICES = ((("path_steps",), ("path_steps",)), (("path_steps",), ("active_steps",)),
+                  (("active_steps",), ("active_steps",)))
+# Tested held out and not kept (2026-11-15, see spread_model/README.md): straight-line distance to the fire and to
+# the active front, the distance round barriers, the fire's growth rate over the previous 12 h and its recent FRP
+# (as terms of either line), and GOES lower bounds for the labels (fire_samples still stores them for experiments).
 # sign of the effect on the arrival time (+1 = later); the "ever burns" classifier gets the opposite sign
 MONOTONE_TIME = {"path_steps": 1, "path_len_m": 1, "path_up_m": -1, "path_down_m": 1,
-                 "path_wind_along_ms": -1, "path_p_veg": -1, "barrier_dist_m": 1, "dist_m": 1,
-                 "active_dist_m": 1, "growth_m_h": -1, "active_steps": 1}
+                 "path_wind_along_ms": -1, "path_p_veg": -1, "active_steps": 1}
 ACTIVE_HOURS = 12.0       # a detection this recent makes a burning cell part of the active front
-GROWTH_HOURS = 12.0       # fire growth is measured over this long before the start
+GROWTH_HOURS = 12.0       # fire growth (a stored sample column, not a feature) is measured over this long
 GROWTH_MIN_M_H = 1.0      # floor of growth_m_h (a fire that did not grow in GROWTH_HOURS)
 NOFUEL_RATE = 0.1         # rate factor of LANDFIRE no-fuel cells in the fastest path (0 = wall); chosen held out
 P_MIN = 1e-4              # spread rates below this are no path (cost > 10,000 steps)
@@ -163,7 +162,7 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
     res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
     p = path_spread_rate(result)
     idx = np.arange(n).reshape(h, w)
-    src, dst, cost, step_len = [], [], [], []
+    src, dst, cost = [], [], []
     for k, (_, dr, dc, _) in enumerate(DIRECTIONS):
         r0, r1, c0, c1 = max(0, -dr), h - max(0, dr), max(0, -dc), w - max(0, dc)
         pk = p[k, r0:r1, c0:c1]
@@ -171,7 +170,6 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
         src.append(idx[r0:r1, c0:c1][m])
         dst.append(idx[r0 + dr:r1 + dr, c0 + dc:c1 + dc][m])
         cost.append(1.0 / pk[m])               # CA steps to cross: the expected wait 1/p of a cell that keeps trying
-        step_len.append(np.full(int(m.sum()), res * math.hypot(dr, dc)))
     src, dst = np.concatenate(src), np.concatenate(dst)
     graph = csr_matrix((np.concatenate(cost), (src, dst)), shape=(n, n))
 
@@ -180,9 +178,6 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
     if front.size == 0 or graph.nnz == 0:
         return {k: nan.copy() for k in FEATURES}   # no fire, or nothing around it can burn
     steps, pred, _ = dijkstra(graph, directed=True, indices=front, min_only=True, return_predecessors=True)
-    # same edges (only into cells that can burn), cost = metres: the shortest way round the barriers
-    around = dijkstra(csr_matrix((np.concatenate(step_len), (src, dst)), shape=(n, n)), directed=True,
-                      indices=front, min_only=True)
 
     # the edge into every node: from pred[j] to j
     has = pred >= 0
@@ -212,7 +207,6 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
         "path_down_m": _sum_along_paths(pred, np.maximum(-rise, 0)),
         "path_wind_along_ms": _sum_along_paths(pred, along) / safe,
         "path_p_veg": _sum_along_paths(pred, veg) / safe,
-        "barrier_dist_m": around,
     }
     active = result["active_front"].values.astype(bool) & burning if "active_front" in result else burning
     if active.any() and not np.array_equal(active, burning):
@@ -229,28 +223,13 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
         out["active_steps"] = dijkstra(g2, directed=True, indices=idx[active].ravel(), min_only=True)
     else:
         out["active_steps"] = steps
-    feats = {k: np.where(reached, v, np.nan).reshape(h, w).astype(np.float32) for k, v in out.items()}
-    feats.update(_plain_features(result, burning, res))
-    return {k: feats[k] for k in FEATURES}
-
-
-def _plain_features(result: xr.Dataset, burning: np.ndarray, res: float) -> dict[str, np.ndarray]:
-    """dist_m, active_dist_m, growth_m_h (see FEATURES): defined for every cell, no path needed."""
-    from scipy.ndimage import distance_transform_edt
-    shape = burning.shape
-    if not burning.any():
-        return {k: np.full(shape, np.nan, np.float32) for k in ("dist_m", "active_dist_m", "growth_m_h")}
-    dist = distance_transform_edt(~burning, sampling=res)
-    active = result["active_front"].values.astype(bool) & burning if "active_front" in result else burning
-    active_dist = distance_transform_edt(~active, sampling=res) if active.any() else dist
-    growth = float(result.attrs.get("growth_m_h", np.nan))
-    return {"dist_m": dist.astype(np.float32), "active_dist_m": active_dist.astype(np.float32),
-            "growth_m_h": np.full(shape, growth, np.float32)}
+    return {k: np.where(reached, out[k], np.nan).reshape(h, w).astype(np.float32) for k in FEATURES}
 
 
 def feature_matrix(features: dict[str, np.ndarray], select: np.ndarray | None = None) -> np.ndarray:
     cols = [features[k] if select is None else features[k][select] for k in FEATURES]
-    return np.stack([c.ravel() for c in cols], axis=1)
+    X = np.stack([c.ravel() for c in cols], axis=1)
+    return np.where(np.isinf(X), np.nan, X)
 
 
 # ---- the model --------------------------------------------------------------------------------
@@ -278,7 +257,7 @@ class ArrivalModel:
         logit P(ever burns) = c0 + sum_k c_k ln(term_k) + cure trees(x)
         ln median arrival   = t0 + sum_k t_k ln(term_k) + time trees(x)      (AFT, normal, scale sigma)
 
-    terms = anchor["terms"]: path_steps and / or barrier_dist_m (ANCHOR_CHOICES, chosen held out).
+    The terms of each line are anchor["time_terms"] / anchor["cure_terms"] (ANCHOR_CHOICES, chosen held out).
 
     The two straight lines are fitted by maximum likelihood (fit_anchor); the trees (XGBoost, started from that
     margin with base_margin) only correct them, and may be None (0 rounds: physics curve only). Far outside the
@@ -424,8 +403,9 @@ def predict_arrival(result: xr.Dataset, time_utc=None, model: ArrivalModel | Non
       p_arrive_<h>h  chance it arrives within h hours (h in HORIZONS_H)
       arrival_h      median hours until it arrives, if it does (arrival_h_q25 / _q75: its 25-75% range), read off
                      the same calibrated chances (arrival_quantiles), so times and chances agree
-    Burning cells -> NaN. Cells no path reaches, or that cannot burn (any mask, NISAR / Sentinel-2 included) ->
-    p_ever 0, arrival inf. `time_utc` is not a feature: the weather in `result` is the start time's."""
+    Burning cells -> NaN. Cells no path reaches, or that cannot burn (WorldCover built-up / bare / water, burn scars)
+    -> p_ever 0, arrival inf. With result["active_front"] (attach_active_front) the chance of ever burning is
+    measured from the active part of the fire. `time_utc` is not a feature: the weather in `result` is the start time's."""
     model = model or load_model()
     burning = result["burning"].values.astype(bool)
     feats = cell_features(result, time_utc)
@@ -433,7 +413,8 @@ def predict_arrival(result: xr.Dataset, time_utc=None, model: ArrivalModel | Non
     shape = burning.shape
     probs = {k: v.reshape(shape).astype(np.float64)
              for k, v in model.probabilities(model.p_ever(X), model.median_if_burns(X)).items()}
-    never = ~np.isfinite(feats["path_steps"]) | (result["mask_reason"].values != 0)
+    # never: no path, or the cell cannot burn. LANDFIRE "no fuel" (2) can (NOFUEL_RATE, see path_spread_rate).
+    never = ~np.isfinite(feats["path_steps"]) | ~np.isin(result["mask_reason"].values, (0, 2))
     for v in probs.values():
         v[never], v[burning] = 0.0, np.nan
     quant = arrival_quantiles(probs, sigma=model.sigma)
@@ -563,26 +544,63 @@ def arrival_bounds(grid, truth: FireTruth) -> dict:
             "lower_goes": lower_goes, "viirs_first": first}
 
 
-def active_front(grid, truth: FireTruth, bounds: dict, t0: pd.Timestamp, burning: np.ndarray) -> np.ndarray:
-    """Burning cells with a VIIRS detection (footprint VIIRS_FOOTPRINT_M) in the ACTIVE_HOURS before t0.
-    None at all -> the whole burning area."""
+def detections_mask(result_or_grid, lon, lat, radius_m: float = VIIRS_FOOTPRINT_M) -> np.ndarray:
+    """Cells within radius_m of any (lon, lat) point, on the grid of a spread result (coords x, y in attrs["crs"])
+    or of a geelayers Grid."""
     from pyproj import Transformer
+    if hasattr(result_or_grid, "epsg"):
+        g = result_or_grid
+        crs, x0, y0, res, shape = g.epsg, g.x0, g.y0, g.res, g.shape
+    else:
+        r = result_or_grid
+        res = float(r.attrs.get("res_m", abs(float(r.x[1] - r.x[0]))))
+        crs, x0, y0 = r.attrs["crs"], float(r.x.values[0]) - res / 2, float(r.y.values[0]) + res / 2
+        shape = (r.sizes["y"], r.sizes["x"])
+    out = np.zeros(shape, bool)
+    lon, lat = np.asarray(lon, np.float64), np.asarray(lat, np.float64)
+    if lon.size == 0:
+        return out
+    xs, ys = Transformer.from_crs(4326, crs, always_xy=True).transform(lon, lat)
+    r0 = np.floor((y0 - np.asarray(ys)) / res).astype(int)
+    c0 = np.floor((np.asarray(xs) - x0) / res).astype(int)
+    k = int(math.ceil(radius_m / res))
+    for dr in range(-k, k + 1):
+        for dc in range(-k, k + 1):
+            if math.hypot(dr, dc) * res <= radius_m:
+                r, c = r0 + dr, c0 + dc
+                ok = (r >= 0) & (r < shape[0]) & (c >= 0) & (c < shape[1])
+                out[r[ok], c[ok]] = True
+    return out
+
+
+def active_front(grid, truth: FireTruth, bounds: dict, t0: pd.Timestamp, burning: np.ndarray) -> np.ndarray:
+    """Training: burning cells with a VIIRS detection (footprint VIIRS_FOOTPRINT_M) in the ACTIVE_HOURS before t0.
+    None at all -> the whole burning area."""
     v = truth.points[truth.points["source"].str.startswith("VIIRS")]
     v = v[(v["time_utc"] > t0 - pd.Timedelta(hours=ACTIVE_HOURS)) & (v["time_utc"] <= t0)]
-    active = np.zeros(grid.shape, bool)
-    if len(v):
-        xs, ys = Transformer.from_crs(4326, grid.epsg, always_xy=True).transform(v["lon"].values, v["lat"].values)
-        r0 = np.floor((grid.y0 - np.asarray(ys)) / grid.res).astype(int)
-        c0 = np.floor((np.asarray(xs) - grid.x0) / grid.res).astype(int)
-        k = int(math.ceil(VIIRS_FOOTPRINT_M / grid.res))
-        for dr in range(-k, k + 1):
-            for dc in range(-k, k + 1):
-                if math.hypot(dr, dc) * grid.res <= VIIRS_FOOTPRINT_M:
-                    r, c = r0 + dr, c0 + dc
-                    ok = (r >= 0) & (r < grid.shape[0]) & (c >= 0) & (c < grid.shape[1])
-                    active[r[ok], c[ok]] = True
-    active &= burning
+    active = detections_mask(grid, v["lon"].values, v["lat"].values) & burning
     return active if active.any() else burning.copy()
+
+
+def attach_active_front(result: xr.Dataset, detections: pd.DataFrame | None, start) -> xr.Dataset:
+    """Website: mark the active front from fire detections (columns time_utc, lat, lon; e.g. VIIRS from FIRMS) in the
+    ACTIVE_HOURS before `start`. No detection on the fire -> unchanged (the whole polygon is the front).
+    Sets attrs active_front_km2 and active_detections."""
+    out = result.copy()
+    out.attrs["active_detections"] = 0
+    if detections is None or len(detections) == 0:
+        return out
+    t0 = _utc(start)
+    when = pd.to_datetime(detections["time_utc"], utc=True)
+    d = detections[(when > t0 - pd.Timedelta(hours=ACTIVE_HOURS)) & (when <= t0)]
+    burning = result["burning"].values.astype(bool)
+    active = detections_mask(result, d["lon"].values, d["lat"].values) & burning
+    if not active.any():
+        return out
+    res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
+    out["active_front"] = (("y", "x"), active)
+    out.attrs.update({"active_detections": int(len(d)), "active_front_km2": float(active.sum()) * res * res / 1e6})
+    return out
 
 
 def growth_rate(area_now_km2: float, area_before_km2: float, hours: float) -> float:
@@ -663,7 +681,8 @@ def fire_inputs(truth: FireTruth, grid, t0: pd.Timestamp, cache: Path = CACHE_DI
 # ---- training samples -------------------------------------------------------------------------
 
 BASELINES = ("euclid_dist_m", "ca_burn_prob")   # stored with the samples to score against, not model features
-# also stored, for experiments: lower_goes_h (label variant), frp_12h_mw (VIIRS FRP in the 12 h before the start)
+# also stored, for experiments: lower_goes_h (label variant), growth_m_h (growth_rate over GROWTH_HOURS before the
+# start), frp_12h_mw (VIIRS FRP in the 12 h before the start)
 
 
 def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFrame:
@@ -672,7 +691,7 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
     from scipy.ndimage import distance_transform_edt
     from .alexandridis import spread_probabilities
     from .simulate import simulate_spread
-    path = cache / slug / f"samples_v5_{RES_M:g}m.parquet"
+    path = cache / slug / f"samples_v6_{RES_M:g}m.parquet"
     if path.exists():
         return pd.read_parquet(path)
     truth = load_truth(slug)
@@ -691,7 +710,7 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
         back = min(GROWTH_HOURS, (_sec(t0) - bounds["t_ign"]) / 3600)
         cell_km2 = grid.res ** 2 / 1e6
         before = burning_at(bounds, t0 - pd.Timedelta(hours=back)).sum() * cell_km2
-        result.attrs["growth_m_h"] = growth_rate(burning.sum() * cell_km2, before, back)
+        growth = growth_rate(burning.sum() * cell_km2, before, back)
         recent = truth.points[truth.points["source"].str.startswith("VIIRS")
                               & (truth.points["time_utc"] > t0 - pd.Timedelta(hours=12))
                               & (truth.points["time_utc"] <= t0)]
@@ -713,12 +732,12 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
         df["upper_h"] = np.maximum(hi[keep], MIN_HOURS)
         lo_goes = np.where(bounds["final"], np.maximum((bounds["lower_goes"] - s0) / 3600, lo), lo)
         df["lower_goes_h"] = np.minimum(np.maximum(lo_goes[keep], MIN_HOURS), df["upper_h"].to_numpy())
-        df["frp_12h_mw"] = float(recent["frp_mw"].sum())
+        df["frp_12h_mw"], df["growth_m_h"] = float(recent["frp_mw"].sum()), growth
         df["weight"] = np.where(never[keep], 1 / CENSORED_KEEP, 1.0)
         df["fire"], df["start_utc"] = slug, t0.isoformat()
         frames.append(df)
         print(f"  {t0:%m-%d %H:%M}: {burning.sum() * grid.res ** 2 / 1e6:.1f} km2 burning "
-              f"({result['active_front'].values.sum() * cell_km2:.1f} active, growing {result.attrs['growth_m_h']:.0f} m/h, "
+              f"({result['active_front'].values.sum() * cell_km2:.1f} active, growing {growth:.0f} m/h, "
               f"FRP {recent['frp_mw'].sum():.0f} MW), {keep.sum()} samples ({(~never[keep]).sum()} burned later)",
               flush=True)
     out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -746,7 +765,8 @@ ROUNDS_GRID = (0, 100, 300)   # tree rounds on top of the anchor lines; chosen b
 
 
 def _X(df: pd.DataFrame) -> np.ndarray:
-    return df[list(FEATURES)].to_numpy(np.float32)
+    X = df[list(FEATURES)].to_numpy(np.float32)
+    return np.where(np.isinf(X), np.nan, X)        # e.g. no way round a barrier: missing, not infinite
 
 
 def _reachable(df: pd.DataFrame) -> np.ndarray:
@@ -986,7 +1006,8 @@ def _mean_auc(scores: dict) -> float:
 
 def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     """Leave-one-fire-out over the training fires (Crosswhite plays no part in any choice):
-      1. the anchor terms (ANCHOR_CHOICES): best held-out AUC with the plain likelihood and no trees;
+      1. the anchor terms (ANCHOR_CHOICES, a pair for the time and the ever-burns line): best held-out AUC with the
+         plain likelihood and no trees;
          then for each time likelihood (plain / right-truncated) and tree rounds on top of the anchor lines
          (ROUNDS_GRID, 0 = physics curve only): held-out AUC and timing error. Rounds: best AUC (ranking is the map's
          job); then the likelihood whose models time held-out fires best (median |ln error| of the median shown);
@@ -999,18 +1020,21 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     train_fires = [s for s in fires if s in data]
     folds = {held: pd.concat([data[s] for s in train_fires if s != held]) for held in train_fires}
     report: dict = {"lofo": {}, "anchor_selection": {}, "selection": {}}
+    name = lambda c: f"time {'+'.join(c[0])} / ever {'+'.join(c[1])}"   # noqa: E731
     for choice in ANCHOR_CHOICES:
-        scores = [evaluate(fit(folds[held], None, 0, truncate=False, terms=choice), data[held]) for held in train_fires]
-        report["anchor_selection"]["+".join(choice)] = {
+        scores = [evaluate(fit(folds[held], None, 0, truncate=False, terms=choice[0], cure_terms=choice[1]),
+                           data[held]) for held in train_fires]
+        report["anchor_selection"][name(choice)] = {
             "auc": round(float(np.mean([_mean_auc(s) for s in scores])), 4),
+            "brier24": round(float(np.mean([s["brier_raw_24h"] for s in scores])), 5),
             "log_err": round(float(np.mean([s.get("median_abs_log_err", np.inf) for s in scores])), 4)}
-    terms = max(ANCHOR_CHOICES, key=lambda c: report["anchor_selection"]["+".join(c)]["auc"])
-    report["terms"] = list(terms)
+    terms, cure_terms = max(ANCHOR_CHOICES, key=lambda c: report["anchor_selection"][name(c)]["auc"])
+    report["terms"], report["cure_terms"] = list(terms), list(cure_terms)
     best: dict = {}
     for truncate in (False, True):
         for rounds in ROUNDS_GRID:
-            scores = [evaluate(fit(folds[held], None, rounds, truncate=truncate, terms=terms), data[held])
-                      for held in train_fires]
+            scores = [evaluate(fit(folds[held], None, rounds, truncate=truncate, terms=terms,
+                                   cure_terms=cure_terms), data[held]) for held in train_fires]
             auc = float(np.mean([_mean_auc(s) for s in scores]))
             err = float(np.mean([s.get("median_abs_log_err", np.inf) for s in scores]))
             report["selection"][f"truncate={truncate} rounds={rounds}"] = {"auc": round(auc, 4), "log_err": round(err, 4)}
@@ -1021,12 +1045,14 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     report.update({"truncate": truncate, "rounds": rounds})
     # Calibration from out-of-fold predictions: the maps used to score fire F are learned from the other training
     # fires' held-out predictions only, so F never informs its own calibration.
-    fold_models = {held: fit(folds[held], None, rounds, truncate=truncate, terms=terms) for held in train_fires}
+    fold_models = {held: fit(folds[held], None, rounds, truncate=truncate, terms=terms, cure_terms=cure_terms)
+                   for held in train_fires}
     for held in train_fires:
         m = fold_models[held]
         m.calibration = fit_calibration([(fold_models[o], data[o]) for o in train_fires if o != held])
         report["lofo"][held] = evaluate(m, data[held])
-    model = fit(pd.concat([data[s] for s in train_fires]), None, rounds, truncate=truncate, terms=terms)
+    model = fit(pd.concat([data[s] for s in train_fires]), None, rounds, truncate=truncate, terms=terms,
+                cure_terms=cure_terms)
     model.calibration = fit_calibration([(fold_models[o], data[o]) for o in train_fires])
     report["validation"] = {s: evaluate(model, data[s]) for s in valid if s in data}
     report["anchor"], report["sigma"] = model.anchor, model.sigma
@@ -1047,8 +1073,8 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
 def _print_report(report: dict) -> None:
     print(f"\nchosen: truncated likelihood {report['truncate']}, tree rounds {report['rounds']}, "
           f"sigma {report['sigma']:.3f} (maximum likelihood), anchor {report['anchor']}")
-    print("anchor terms, held-out mean AUC / timing |ln error|: " + "; ".join(
-        f"{k}: {v['auc']} / {v['log_err']}" for k, v in report["anchor_selection"].items()))
+    print("anchor terms, held-out mean AUC / raw Brier 24 h / timing |ln error|: " + "; ".join(
+        f"{k}: {v['auc']} / {v['brier24']} / {v['log_err']}" for k, v in report["anchor_selection"].items()))
     print("held-out mean AUC / timing |ln error| by choice: " + "; ".join(
         f"{k}: {v['auc']} / {v['log_err']}" for k, v in report["selection"].items()))
     rows = {**{f"{k} (held out)": v for k, v in report["lofo"].items()},

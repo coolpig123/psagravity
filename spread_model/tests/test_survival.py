@@ -106,7 +106,6 @@ def toy_samples(n=4000, seed=0, starts=2):
     along = rng.uniform(-5, 5, n)
     df["path_len_m"], df["path_steps"], df["path_wind_along_ms"] = d, d / 100, along
     df["active_steps"] = d / 100
-    df["barrier_dist_m"] = d * rng.uniform(0.9, 1.0, n)            # straight-ish: a little shorter than the path
     t = d / 1000 / np.where(along > 0, 1.0, 0.25)
     burned = d < 12_000
     df["lower_h"] = np.where(burned, np.maximum(np.floor(t / 2) * 2, survival.MIN_HOURS), 40.0)
@@ -286,25 +285,17 @@ def test_arrival_quantiles_agree_with_the_chances(toy_model):
     assert (res["arrival_h_q25"].values[m] <= t50 + 1e-6).all() and (t50 <= res["arrival_h_q75"].values[m] + 1e-6).all()
 
 
-def test_barrier_distance_goes_round_walls():
-    ds = make_ds(u=8.0)                                                 # strong wind east: path cost is lopsided
-    f = cell_features(spread_probabilities(ds))
-    assert f["barrier_dist_m"][C, C + 3] == pytest.approx(300.0) and f["barrier_dist_m"][C, C - 3] == pytest.approx(300.0)
-    lc = np.full((N, N), 20, np.int16)
-    lc[:, C + 2] = 80
-    lc[0, C + 2] = 20                                                   # a river with one crossing at the top
-    ds["landcover"] = (("y", "x"), lc)
-    f = cell_features(spread_probabilities(ds))
-    assert f["barrier_dist_m"][C, C + 3] > 1000                         # round the river, not across it
-
-
-def test_anchor_on_two_terms():
+def test_separate_terms_for_the_two_lines():
     df, t, burned = toy_samples()
-    model = fit(df, None, 0, terms=("path_steps", "barrier_dist_m"))
-    assert model.anchor["terms"] == ["path_steps", "barrier_dist_m"] and len(model.anchor["time"]) == 3
+    df["active_steps"] = df["path_steps"] * 3                           # another scale: the lines must pick it up
+    model = fit(df, None, 0, terms=("path_steps",), cure_terms=("active_steps",))
+    a = model.anchor
+    assert a["time_terms"] == ["path_steps"] and a["cure_terms"] == ["active_steps"]
     X = df[list(FEATURES)].to_numpy(np.float32)
     ok = burned & (t < 30)
     assert np.median(np.abs(np.log(model.median_if_burns(X)[ok]) - np.log(t[ok]))) < 1.0
+    same = fit(toy_samples()[0], None, 0)                               # both lines on path_steps
+    assert np.corrcoef(model.p_ever(X), same.p_ever(toy_samples()[0][list(FEATURES)].to_numpy(np.float32)))[0, 1] > 0.99
 
 
 def test_quantiles_survive_flat_calibration_steps():
@@ -334,19 +325,49 @@ def test_landfire_no_fuel_is_slow_not_a_wall():
 def test_active_front_features():
     burning = np.zeros((N, N), np.int16)
     burning[C, 2:9] = 1                                                 # a burned strip, active only at its east end
-    ds = make_ds(burning=burning)
-    res = spread_probabilities(ds)
+    res = spread_probabilities(make_ds(burning=burning))
     same = cell_features(res)                                           # no active front given: the whole fire
     assert np.allclose(same["active_steps"], same["path_steps"], equal_nan=True)
-    assert np.allclose(same["active_dist_m"], same["dist_m"], equal_nan=True)
     active = np.zeros((N, N), bool)
     active[C, 8] = True
     res["active_front"] = (("y", "x"), active)
     f = cell_features(res)
-    assert f["active_dist_m"][C, 9] == pytest.approx(100.0) and f["active_dist_m"][C, 1] == pytest.approx(700.0)
-    assert f["dist_m"][C, 1] == pytest.approx(100.0)
     assert f["active_steps"][C, 9] == pytest.approx(f["path_steps"][C, 9])       # next to the active end: the same
     assert f["active_steps"][C, 1] > f["path_steps"][C, 1] + 5                  # far end: must creep along the burned strip
+
+
+def test_attach_active_front_from_detections(toy_model):
+    from pyproj import Transformer
+    burning = np.zeros((N, N), np.int16)
+    burning[C, 2:9] = 1
+    res = spread_probabilities(make_ds(burning=burning))
+    lon, lat = Transformer.from_crs(res.attrs["crs"], 4326, always_xy=True).transform(
+        [float(res.x[8]), float(res.x[8]), float(res.x[0])], [float(res.y[C]), float(res.y[C]), float(res.y[0])])
+    det = pd.DataFrame({"lon": lon, "lat": lat, "time_utc": pd.to_datetime(
+        ["2026-08-09 15:00", "2026-08-08 15:00", "2026-08-09 15:00"], utc=True)})   # recent, too old, off the fire
+    out = survival.attach_active_front(res, det, T0)
+    active = out["active_front"].values
+    assert active[C, 8] and not active[C, 2] and active.sum() <= 4 and (active <= burning.astype(bool)).all()
+    assert out.attrs["active_detections"] == 2 and out.attrs["active_front_km2"] > 0
+    for none in (None, det.iloc[:0], det.iloc[[1]]):                     # nothing recent on the fire: unchanged
+        assert "active_front" not in survival.attach_active_front(res, none, T0)
+    # the ever-burns line on active_steps: the far end of the strip gets a lower chance than without the front
+    model = ArrivalModel(None, None, 1.0, {"terms": ["path_steps"], "time_terms": ["path_steps"],
+                                           "cure_terms": ["active_steps"], "cure": [2.0, -1.0], "time": [0.0, 1.0]})
+    with_front = predict_arrival(out, T0, model=model)["p_ever"].values
+    without = predict_arrival(res, T0, model=model)["p_ever"].values
+    assert with_front[C, 1] < without[C, 1] and with_front[C, 9] == pytest.approx(without[C, 9], rel=1e-5)
+
+
+def test_no_fuel_cells_show_on_the_map_but_water_does_not(toy_model):
+    ds = make_ds()
+    lf = np.full((N, N), 2, np.int16)
+    lf[:, C + 2] = 0                                                    # LANDFIRE "no fuel" east
+    lc = np.full((N, N), 20, np.int16)
+    lc[:, C - 2] = 80                                                   # water west
+    ds["fuel_lifeform"], ds["landcover"] = (("y", "x"), lf), (("y", "x"), lc)
+    res = predict_arrival(spread_probabilities(ds), T0, model=toy_model)
+    assert res["p_ever"].values[C, C + 2] > 0 and res["p_ever"].values[C, C - 2] == 0
 
 
 def test_growth_rate():
@@ -354,10 +375,6 @@ def test_growth_rate():
     assert survival.growth_rate(4 * math.pi, math.pi, 10.0) == pytest.approx(100.0)
     assert survival.growth_rate(5.0, 5.0, 12.0) == survival.GROWTH_MIN_M_H        # no growth: the floor
     assert math.isnan(survival.growth_rate(5.0, 1.0, 0.0))
-    res = spread_probabilities(make_ds())
-    assert np.isnan(cell_features(res)["growth_m_h"]).all()                      # unknown unless given
-    res.attrs["growth_m_h"] = 120.0
-    assert (cell_features(res)["growth_m_h"] == 120.0).all()
 
 
 def test_goes_gives_a_lower_bound_only():
@@ -378,3 +395,41 @@ def test_goes_gives_a_lower_bound_only():
     early = grid.cell_of(39.72, -120.05)                                # burned at 09:00, before the GOES detection
     assert b["lower_goes"][early] == b["lower"][early]                  # GOES after the upper bound: not used
     assert (b["lower_goes"] >= b["lower"]).all() and (b["lower_goes"] <= b["upper"]).all()
+
+
+def test_payload_active_front_from_detections_and_failures(toy_model):
+    from pyproj import Transformer
+    seen = {}
+
+    def detections_at_fire():
+        def get(bbox, start):
+            seen["bbox"], seen["start"] = bbox, start
+            w, s, e, n = bbox
+            return pd.DataFrame({"lon": [(w + e) / 2], "lat": [(s + n) / 2],            # the fire is the centre cell
+                                 "time_utc": pd.to_datetime(["2026-08-09 18:00"], utc=True)})
+        return get
+    arrival = lambda r, t: predict_arrival(r, t, model=toy_model)   # noqa: E731
+    body = {**BODY, "use_nisar": False, "steps": 3, "use_firms": True}
+    out = predict_payload(body, predict_fn=fake_predict({}), arrival_fn=arrival, detections_factory=detections_at_fire)
+    assert out["summary"]["active_detections"] == 1 and out["summary"]["active_front_km2"] > 0
+    assert len(seen["bbox"]) == 4 and seen["start"].startswith("2026-08-09T21:00")
+
+    def none():
+        return lambda bbox, start: pd.DataFrame({"lon": [], "lat": [], "time_utc": []})
+    out = predict_payload(body, predict_fn=fake_predict({}), arrival_fn=arrival, detections_factory=none)
+    assert any("whole polygon" in n for n in out["summary"]["notes"]) and out["summary"]["arrival"] is True
+
+    def no_key():
+        def get(bbox, start):
+            raise RuntimeError("FIRMS_MAP_KEY is not set")
+        return get
+    out = predict_payload(body, predict_fn=fake_predict({}), arrival_fn=arrival, detections_factory=no_key)
+    assert any(n.startswith("active front skipped") for n in out["summary"]["notes"]) and out["summary"]["arrival"]
+
+    def not_installed():
+        raise ImportError("No module named 'firedata'")
+    out = predict_payload(body, predict_fn=fake_predict({}), arrival_fn=arrival, detections_factory=not_installed)
+    assert any("not installed" in n for n in out["summary"]["notes"]) and out["summary"]["arrival"]
+    out = predict_payload({**body, "use_firms": False}, predict_fn=fake_predict({}), arrival_fn=arrival,
+                          detections_factory=lambda: pytest.fail("FIRMS must not be called"))
+    assert "active_detections" not in out["summary"]
