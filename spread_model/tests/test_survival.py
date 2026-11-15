@@ -1,6 +1,7 @@
 """Offline tests of the arrival-time (cure-fraction survival) model: features, labels, metrics, fit / save / load,
 web payload."""
 import json
+import math
 
 import numpy as np
 import pandas as pd
@@ -104,6 +105,7 @@ def toy_samples(n=4000, seed=0, starts=2):
     d = rng.uniform(100, 20_000, n)
     along = rng.uniform(-5, 5, n)
     df["path_len_m"], df["path_steps"], df["path_wind_along_ms"] = d, d / 100, along
+    df["active_steps"] = d / 100
     df["barrier_dist_m"] = d * rng.uniform(0.9, 1.0, n)            # straight-ish: a little shorter than the path
     t = d / 1000 / np.where(along > 0, 1.0, 0.25)
     burned = d < 12_000
@@ -315,3 +317,64 @@ def test_quantiles_survive_flat_calibration_steps():
     assert (q[0.25] < 6).all() or q[0.25][0] < q[0.5][0]                # no collapse onto 6 h
     assert q[0.25][0] < q[0.5][0] < q[0.75][0] and q[0.25][1] < q[0.5][1] < q[0.75][1]
     assert (q[0.75] < 24 * 60).all()                                    # no months from a microscopic slope
+
+
+def test_landfire_no_fuel_is_slow_not_a_wall():
+    ds = make_ds()
+    lf = np.full((N, N), 2, np.int16)
+    lf[:, C + 2] = 0                                                    # a strip LANDFIRE calls "no fuel"
+    ds["fuel_lifeform"] = (("y", "x"), lf)
+    f = cell_features(spread_probabilities(ds))
+    open_ = cell_features(spread_probabilities(make_ds()))
+    assert np.isfinite(f["path_steps"][C, C + 3])                       # crossable ...
+    assert f["path_steps"][C, C + 3] > open_["path_steps"][C, C + 3] + 5   # ... at a tenth of the rate
+    assert f["path_steps"][C, C + 1] == pytest.approx(open_["path_steps"][C, C + 1])
+
+
+def test_active_front_features():
+    burning = np.zeros((N, N), np.int16)
+    burning[C, 2:9] = 1                                                 # a burned strip, active only at its east end
+    ds = make_ds(burning=burning)
+    res = spread_probabilities(ds)
+    same = cell_features(res)                                           # no active front given: the whole fire
+    assert np.allclose(same["active_steps"], same["path_steps"], equal_nan=True)
+    assert np.allclose(same["active_dist_m"], same["dist_m"], equal_nan=True)
+    active = np.zeros((N, N), bool)
+    active[C, 8] = True
+    res["active_front"] = (("y", "x"), active)
+    f = cell_features(res)
+    assert f["active_dist_m"][C, 9] == pytest.approx(100.0) and f["active_dist_m"][C, 1] == pytest.approx(700.0)
+    assert f["dist_m"][C, 1] == pytest.approx(100.0)
+    assert f["active_steps"][C, 9] == pytest.approx(f["path_steps"][C, 9])       # next to the active end: the same
+    assert f["active_steps"][C, 1] > f["path_steps"][C, 1] + 5                  # far end: must creep along the burned strip
+
+
+def test_growth_rate():
+    assert survival.growth_rate(math.pi, 0.0, 10.0) == pytest.approx(100.0)       # radius 0 -> 1 km in 10 h
+    assert survival.growth_rate(4 * math.pi, math.pi, 10.0) == pytest.approx(100.0)
+    assert survival.growth_rate(5.0, 5.0, 12.0) == survival.GROWTH_MIN_M_H        # no growth: the floor
+    assert math.isnan(survival.growth_rate(5.0, 1.0, 0.0))
+    res = spread_probabilities(make_ds())
+    assert np.isnan(cell_features(res)["growth_m_h"]).all()                      # unknown unless given
+    res.attrs["growth_m_h"] = 120.0
+    assert (cell_features(res)["growth_m_h"] == 120.0).all()
+
+
+def test_goes_gives_a_lower_bound_only():
+    from geelayers.grid import Grid
+    square = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
+        "type": "Polygon", "coordinates": [[[-120.06, 39.71], [-120.02, 39.71], [-120.02, 39.74], [-120.06, 39.74],
+                                            [-120.06, 39.71]]]}}]}
+    grid = Grid.from_polygon(square, buffer_km=1.0, res_m=100.0)
+    t = pd.to_datetime(["2026-08-09 09:00", "2026-08-09 21:00", "2026-08-09 15:00"], utc=True)
+    pts = pd.DataFrame({"time_utc": t, "lat": [39.72, 39.73, 39.73], "lon": [-120.05, -120.03, -120.03],
+                        "source": ["VIIRS_SNPP", "VIIRS_NOAA20", "GOES18_FDC"], "ambiguous": False})
+    truth = survival.FireTruth("test", square, {"features": []}, pts, pd.Timestamp("2026-08-09 06:00", tz="UTC"))
+    b = survival.arrival_bounds(grid, truth)
+    hour = lambda s: (s - pd.Timestamp("2026-08-09", tz="UTC").timestamp()) / 3600   # noqa: E731
+    cell = grid.cell_of(39.73, -120.03)                                 # VIIRS: between the 09:00 pass and 21:00
+    assert hour(b["upper"][cell]) == pytest.approx(21.0) and hour(b["lower"][cell]) == pytest.approx(9.0)
+    assert hour(b["lower_goes"][cell]) == pytest.approx(15.0)           # its GOES pixel was first seen at 15:00
+    early = grid.cell_of(39.72, -120.05)                                # burned at 09:00, before the GOES detection
+    assert b["lower_goes"][early] == b["lower"][early]                  # GOES after the upper bound: not used
+    assert (b["lower_goes"] >= b["lower"]).all() and (b["lower_goes"] <= b["upper"]).all()
