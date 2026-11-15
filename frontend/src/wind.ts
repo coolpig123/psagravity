@@ -1,7 +1,8 @@
 // Animated wind on the map, in the style of earth.nullschool.net (Cameron Beccario, MIT licence):
 // a colour overlay of wind speed under the map's own layers, and thousands of particles drifting with the
 // wind on a canvas above it, leaving short fading trails, brighter where the wind is stronger.
-// The wind is a small u/v grid (MERRA-2, ~55 km cells) from POST /api/wind; it is bilinearly interpolated.
+// The wind is a u/v grid (MERRA-2, ~55 km cells) from POST /api/wind covering the whole visible map (the server
+// widens the view to 5 deg tiles, so small pans and zooms need no new data); it is bilinearly interpolated.
 import * as maplibregl from 'maplibre-gl'
 
 // Answer of POST /api/wind (firedata.merra2.wind_grid).
@@ -17,6 +18,33 @@ export type WindGrid = {
   mean_dir_deg: number
   source: string
   resolution: string
+  bbox?: [number, number, number, number] // [west, south, east, north] where the wind is complete (no faded edge)
+}
+
+// Zoomed far out, only part of the view gets wind (at most this many degrees), to keep downloads small.
+export const MAX_VIEW_LON_DEG = 30
+export const MAX_VIEW_LAT_DEG = 20
+
+// The visible map as [west, south, east, north], clamped to the world. If it is wider than MAX_VIEW_* degrees,
+// it is cut to that size around `focus` (the polygon, kept inside the view) or else the middle of the view.
+export function viewBox(map: maplibregl.Map, focus?: [number, number]): [number, number, number, number] {
+  const b = map.getBounds()
+  let [w, e] = [Math.max(-180, b.getWest()), Math.min(180, b.getEast())]
+  let [s, n] = [Math.max(-85, b.getSouth()), Math.min(85, b.getNorth())]
+  // centre c, clamped so the cut stays inside [lo, hi]
+  const cut = (lo: number, hi: number, c: number, span: number): [number, number] => {
+    const mid = Math.min(Math.max(c, lo + span / 2), hi - span / 2)
+    return [mid - span / 2, mid + span / 2]
+  }
+  if (e - w > MAX_VIEW_LON_DEG) [w, e] = cut(w, e, focus ? focus[0] : (w + e) / 2, MAX_VIEW_LON_DEG)
+  if (n - s > MAX_VIEW_LAT_DEG) [s, n] = cut(s, n, focus ? focus[1] : (s + n) / 2, MAX_VIEW_LAT_DEG)
+  return [w, s, e, n]
+}
+
+// True if the grid already has complete wind for the whole box (then no new request is needed).
+export function covers(g: WindGrid, box: [number, number, number, number]): boolean {
+  if (!g.bbox) return false
+  return box[0] >= g.bbox[0] && box[1] >= g.bbox[1] && box[2] <= g.bbox[2] && box[3] <= g.bbox[3]
 }
 
 // earth.nullschool.net "wind" overlay: segmented colour scale by speed (m/s).
@@ -166,8 +194,8 @@ export class WindLayer {
   private addOverlay(g: WindGrid) {
     const [w, e] = [g.lon[0], g.lon[g.lon.length - 1]]
     const [s, n] = [g.lat[0], g.lat[g.lat.length - 1]]
-    const W = 256
-    const H = 256
+    const W = 512
+    const H = 512
     const c = document.createElement('canvas')
     c.width = W
     c.height = H

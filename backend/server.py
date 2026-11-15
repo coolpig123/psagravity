@@ -14,13 +14,14 @@ POST /api/predict   body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z", "ra
                     ignition-probability cells as GeoJSON plus a summary; see spread_model/src/firespread/web.py.
                     Needs spread_model (and real_fires for NISAR) in the venv; see frontend/README.md.
 
-POST /api/wind      body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z"}
+POST /api/wind      body: {"bbox": [west, south, east, north], "start": "2026-08-09T21:00Z"}
                     MERRA-2 10 m wind (u, v on its ~55 km grid) of the hour containing "start", over the
-                    polygon + 1.5 deg, for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
+                    map view (widened to 5 deg tiles), for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
                     and the Earthdata login in real_fires/.env. 404 = MERRA-2 has no data for that time yet.
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -130,34 +131,46 @@ def run_predict(body: dict) -> dict:
     return out
 
 
-WIND_MARGIN_DEG = 1.5   # wind is shown this far around the polygon (MERRA-2 cells are ~0.5 deg)
+# The wind fills the visible map (POST /api/wind with the map's bbox). The box is widened to a 5 deg tile grid, so
+# panning and zooming near the same place reuse the same data, plus a bit more than one MERRA-2 cell (0.625 deg),
+# so the faded edge of the wind area stays outside the view. Views wider than WIND_MAX_SPAN_DEG are refused
+# (the website asks for at most 30 x 20 deg, the middle of a zoomed-out view).
+WIND_TILE_DEG = 5.0
+WIND_EDGE_DEG = 0.7
+WIND_MAX_SPAN_DEG = 40.0
 
 
-def polygon_bbox(polygon: dict) -> tuple[float, float, float, float]:
-    """(west, south, east, north) of a GeoJSON Polygon / Feature / FeatureCollection. ValueError if malformed."""
+def wind_view_bbox(bbox) -> tuple[float, float, float, float]:
+    """The map view [west, south, east, north] -> the box to read: clamped to the world, snapped out to the tiles.
+    ValueError if malformed or too wide."""
     try:
-        geom = polygon.get("features", [polygon])[0] if polygon.get("type") == "FeatureCollection" else polygon
-        ring = (geom.get("geometry") or geom)["coordinates"][0]
-        lons, lats = [float(p[0]) for p in ring], [float(p[1]) for p in ring]
-    except (KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
-        raise ValueError(f"polygon: a GeoJSON Polygon is required ({e})") from None
-    if not ring or not (-90 <= min(lats) <= max(lats) <= 90) or not (-180 <= min(lons) <= max(lons) <= 180):
-        raise ValueError("polygon: coordinates out of range")
-    return min(lons), min(lats), max(lons), max(lats)
+        w, s, e, n = (float(v) for v in bbox)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"bbox: [west, south, east, north] in degrees is required ({err})") from None
+    w, e = max(-180.0, w), min(180.0, e)
+    s, n = max(-90.0, s), min(90.0, n)
+    if not (w < e and s < n):
+        raise ValueError(f"bbox: empty or crosses the antimeridian: {bbox}")
+    if e - w > WIND_MAX_SPAN_DEG or n - s > WIND_MAX_SPAN_DEG:
+        raise ValueError(f"bbox: at most {WIND_MAX_SPAN_DEG:g} deg wide, got {e - w:.1f} x {n - s:.1f}")
+    t = WIND_TILE_DEG
+    return (max(-180.0, math.floor(w / t) * t), max(-90.0, math.floor(s / t) * t),
+            min(180.0, math.ceil(e / t) * t), min(90.0, math.ceil(n / t) * t))
 
 
 def run_wind(body: dict) -> dict:
-    """POST /api/wind: MERRA-2 wind around the polygon. ValueError = bad request, LookupError = no data yet."""
+    """POST /api/wind: MERRA-2 wind over the map view. ValueError = bad request, LookupError = no data yet."""
     from firedata.merra2 import wind_grid   # imported here so the other endpoints work without it
-    bbox = polygon_bbox(body.get("polygon") or {})
+    bbox = wind_view_bbox(body.get("bbox"))
     try:
         start = pd.Timestamp(body["start"])
     except (KeyError, ValueError, TypeError) as e:
         raise ValueError(f"start: an ISO time in UTC is required ({e})") from None
     t0 = time.time()
-    out = wind_grid(bbox, start, margin_deg=WIND_MARGIN_DEG)
-    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells, mean "
-          f"{out['mean_speed_ms']:.1f} m/s from {out['mean_dir_deg']:.0f} deg ({time.time() - t0:.1f} s)", flush=True)
+    out = wind_grid(bbox, start, margin_deg=WIND_EDGE_DEG)
+    out["bbox"] = list(bbox)   # where the wind is complete (without the faded edge)
+    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells over {bbox} "
+          f"({time.time() - t0:.1f} s)", flush=True)
     return out
 
 
@@ -179,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 self._reply(200, run_wind(body))
-            except ValueError as e:      # bad JSON, polygon or start
+            except ValueError as e:      # bad JSON, bbox or start
                 self._reply(400, {"error": f"bad request: {e}"})
             except LookupError as e:     # MERRA-2 not published yet for that time
                 self._reply(404, {"error": str(e), "no_data": True})
