@@ -11,16 +11,17 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import ee
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from . import fetch
+from ._ee_compat import ee
 from .auth import init
 from .derive import decode_evc, slope_aspect, wind_speed_dir
 from .grid import Grid
 from .layers import LAYERS, VARIABLES, WEATHER
+from .meteomatics import fetch_meteomatics_weather, has_credentials as has_meteomatics_credentials
 from .perimeter import resolve_perimeter
 
 DEFAULT_LAYERS = ("terrain", "landcover", "vegetation_cover", "vegetation", "fuel_dryness", "weather")
@@ -88,13 +89,27 @@ def get_weather(grid: Grid, start, end, source: str = "rtma", step_hours: int = 
 
     source: "rtma" (US, observed analysis, best for hindcasts; auto-falls back outside CONUS),
     "era5_land" (global reanalysis, a few days behind), "gfs" (forecast: use for live predictions;
-    `issued` picks the run, default = latest run at or before `start`), or "auto".
+    `issued` picks the run, default = latest run at or before `start`), "meteomatics" (1 km
+    historical, real-time and forecast weather via Meteomatics API), or "auto".
     Weather is smooth, so a coarse grid is enough and much faster: get_weather(grid.with_resolution(1000), ...),
     then regrid(weather, grid) to put it on the model grid.
     """
-    init()
     start, end = _utc(start), _utc(end)
     candidates = _weather_candidates(grid, start, end, source)
+    if candidates == ["meteomatics"]:
+        return fetch_meteomatics_weather(
+            grid, start, end, step_hours=step_hours, var_attrs={v: _attrs(v) for v in VARIABLES}
+        )
+    if source in ("auto", "rtma") and has_meteomatics_credentials():
+        # Prefer high-resolution Meteomatics for future forecasts when credentials are configured,
+        # and keep it as a fallback for historical windows.
+        now_utc = pd.Timestamp.now(tz="UTC")
+        if end > now_utc:
+            candidates = ["meteomatics", *candidates]
+        else:
+            candidates = [*candidates, "meteomatics"]
+
+    init()
     reg = fetch.region(grid)
     chosen = None
     times_ms: list[int] = []
@@ -102,6 +117,17 @@ def get_weather(grid: Grid, start, end, source: str = "rtma", step_hours: int = 
     meta: dict[str, str] = {}
     last_err: Exception | None = None
     for cand in candidates:
+        if cand == "meteomatics":
+            try:
+                ds_mm = fetch_meteomatics_weather(
+                    grid, start, end, step_hours=step_hours, var_attrs={v: _attrs(v) for v in VARIABLES}
+                )
+                if source != "meteomatics" and source != "auto":
+                    ds_mm.attrs["weather_source_requested"] = source
+                return ds_mm
+            except Exception as exc:
+                last_err = exc
+                continue
         src = WEATHER[cand]
         try:
             c, m = src.collection(reg, start, end, issued)
