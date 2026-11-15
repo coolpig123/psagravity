@@ -317,14 +317,35 @@ def detections_provider():
     return get
 
 
+def viirs_points(bbox, start, lookback_h: float) -> pd.DataFrame:
+    """Stands in for firespread.active_front.firms_viirs_points: the downloaded VIIRS detections in the box over
+    (start - lookback_h, start]. RuntimeError when none were downloaded (reported as a note, not a failure)."""
+    pts = detections_provider()(bbox, start)
+    t1 = _utc(start)
+    when = pd.to_datetime(pts["time_utc"], utc=True)
+    return pts[(when > t1 - pd.Timedelta(hours=lookback_h)) & (when <= t1)].reset_index(drop=True)
+
+
 def static_predict(polygon=None, start=None, *, nisar=None, burn_scars: bool = True, radius_km: float = 5.0,
-                   res_m: float = 100.0, weather_source: str = "auto", hours: float = 6.0) -> xr.Dataset:
-    """firespread.predict() with the inputs from the downloaded files."""
+                   res_m: float = 100.0, weather_source: str = "auto", hours: float = 6.0,
+                   active_front: bool | None = True, lookback_h: float | None = None,
+                   notes: list[str] | None = None, **_newer) -> xr.Dataset:
+    """firespread.predict() with the inputs from the downloaded files.
+
+    `_newer`: arguments a later firespread.web may add; they are ignored here instead of failing the prediction."""
     from firespread import attach_nisar, spread_probabilities
     inputs = fire_inputs(polygon, start, hours=hours, radius_km=radius_km, res_m=res_m, weather_source=weather_source)
     if burn_scars:
         inputs = attach_burn_scars(inputs, start)
     inputs = attach_nisar(inputs, nisar)
+    if active_front is not False:
+        try:      # the CA spreads from the cells VIIRS saw burning (firespread.active_front), when there are any
+            from firespread.active_front import DEFAULT_LOOKBACK_H, attach_active_front
+        except ImportError:                 # an older firespread without it: the whole polygon spreads
+            pass
+        else:
+            inputs = attach_active_front(inputs, start, lookback_h=lookback_h or DEFAULT_LOOKBACK_H, notes=notes,
+                                         points_fn=viirs_points)
     return spread_probabilities(inputs, time=start)
 
 
