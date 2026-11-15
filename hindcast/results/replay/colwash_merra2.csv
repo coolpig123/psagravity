@@ -1,0 +1,3 @@
+fire,window,start_utc,start_km2,horizon_h,target_utc,hours,method,iou,precision,recall,pred_new_km2,obs_new_km2,circle_iou,circle_precision,circle_recall,beats_circle,oracle_circle_iou,weather,time_developing,reached_grid_edge,active_front_km2
+colwash,colwash_0823_0930,2026-08-23 09:30,5.4000,12,2026-08-23 20:30,11.0000,CA,0.0182,0.0408,0.0317,0.4900,0.6300,0.0707,0.0970,0.2063,False,0.0707,merra2,1,0,3.3300
+colwash,colwash_0823_0930,2026-08-23 09:30,5.4000,12,2026-08-23 20:30,11.0000,arrival,0.0000,0.0000,0.0000,0.0700,0.6300,0.0707,0.0970,0.2063,False,0.0707,merra2,1,0,3.3300

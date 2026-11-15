@@ -1,0 +1,5 @@
+fire,window,start_utc,start_km2,horizon_h,target_utc,hours,method,iou,precision,recall,pred_new_km2,obs_new_km2,circle_iou,circle_precision,circle_recall,beats_circle,oracle_circle_iou,weather,time_developing,reached_grid_edge,active_front_km2
+biscar,biscar_0720_2030,2026-07-20 20:30,25.9000,24,2026-07-21 20:30,24.0000,CA,0.0000,0.0000,0.0000,20.4300,4.7100,0.0000,0.0000,0.0000,False,0.0000,merra2,1,0,19.3000
+biscar,biscar_0720_2030,2026-07-20 20:30,25.9000,24,2026-07-21 20:30,24.0000,arrival,0.0000,0.0000,0.0000,2.5300,4.7100,0.0000,0.0000,0.0000,False,0.0000,merra2,1,0,19.3000
+biscar,biscar_0721_2030,2026-07-21 20:30,30.6000,24,2026-07-22 20:30,24.0000,CA,0.0156,0.0162,0.3133,16.0700,0.8300,0.0174,0.0179,0.3614,False,0.0194,merra2,1,0,1.3400
+biscar,biscar_0721_2030,2026-07-21 20:30,30.6000,24,2026-07-22 20:30,24.0000,arrival,0.0351,0.1143,0.0482,0.3500,0.8300,0.0194,0.0222,0.1325,True,0.0194,merra2,1,0,1.3400
