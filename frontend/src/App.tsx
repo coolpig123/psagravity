@@ -29,6 +29,14 @@ const DEFAULT_START = '2026-08-09T21:00Z' // Bug Fire, first afternoon: easy to 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 // Answer of POST /api/predict (spread_model/src/firespread/web.py).
+type WeatherTimelineStep = {
+  time_utc: string
+  wind_speed_ms?: number | null
+  wind_dir_deg?: number | null
+  temp_c?: number | null
+  rh_pct?: number | null
+}
+
 type Prediction = {
   cells: GeoJSON.FeatureCollection // one square per cell, properties.p = ignition probability
   bounds: [number, number, number, number]
@@ -39,6 +47,8 @@ type Prediction = {
     expected_new_area_km2?: number
     weather_time_utc?: string
     weather_source?: string
+    weather_dataset?: string
+    weather_steps?: number
     weather_note?: string
     nisar_passes_used?: string
     nisar_coverage_pct?: number
@@ -47,6 +57,10 @@ type Prediction = {
     sim_steps?: number
     sim_expected_area_km2?: number
     sim_reached_grid_edge?: number
+    sim_time_developing?: number
+    sim_weather_steps?: number
+    sim_forecast_hours?: number
+    weather_timeline?: WeatherTimelineStep[]
     n_cells: number
     max_prob: number | null
     notes: string[]
@@ -152,6 +166,8 @@ function App() {
   const pointsRef = useRef(points)
   pointsRef.current = points
   const [start, setStart] = useState(DEFAULT_START) // UTC time the prediction starts
+  const [weatherSource, setWeatherSource] = useState<'auto' | 'meteomatics' | 'rtma' | 'gfs' | 'era5_land'>('auto')
+  const [forecastHours, setForecastHours] = useState(6)
   const [prediction, setPrediction] = useState<Prediction | null>(null)
   const [predicting, setPredicting] = useState(false)
   const [error, setError] = useState('')
@@ -493,7 +509,12 @@ ${err instanceof Error ? err.message : err}`)
       const res = await fetch('/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ polygon: toGeoJSON(points, 'locked'), start: start.trim() }),
+        body: JSON.stringify({
+          polygon: toGeoJSON(points, 'locked'),
+          start: start.trim(),
+          weather_source: weatherSource,
+          hours: forecastHours,
+        }),
       })
       if (res.status === 503) throw new Error('The Python server is not running. Start everything with: npm run dev')
       const data = await res.json().catch(() => null)
@@ -523,6 +544,27 @@ ${err instanceof Error ? err.message : err}`)
         <label className="start">
           Start (UTC)
           <input value={start} onChange={(e) => setStart(e.target.value)} placeholder={DEFAULT_START} size={18} />
+        </label>
+        <label className="start">
+          Weather
+          <select value={weatherSource} onChange={(e) => setWeatherSource(e.target.value as typeof weatherSource)}>
+            <option value="auto">Auto (Meteomatics / RTMA / GFS)</option>
+            <option value="meteomatics">Meteomatics (1 km Forecast)</option>
+            <option value="rtma">NOAA RTMA (US analysis)</option>
+            <option value="gfs">NOAA GFS (0.25° forecast)</option>
+            <option value="era5_land">ECMWF ERA5-Land</option>
+          </select>
+        </label>
+        <label className="start">
+          Forecast (h)
+          <input
+            type="number"
+            min={1}
+            max={168}
+            value={forecastHours}
+            onChange={(e) => setForecastHours(Math.max(1, Math.min(168, Number(e.target.value) || 6)))}
+            style={{ width: '3.5rem' }}
+          />
         </label>
         <button
           className="primary"
@@ -587,6 +629,9 @@ ${err instanceof Error ? err.message : err}`)
             </p>
             <p>
               <b>Weather:</b> {s.weather_time_utc || 'none'} UTC{s.weather_source ? ` (${s.weather_source})` : ''}
+              {s.sim_time_developing
+                ? ` · time-developing over ${s.sim_forecast_hours?.toFixed(0) ?? s.sim_weather_steps} h (${s.sim_weather_steps} hourly steps)`
+                : ''}
               {' · '}
               <b>NISAR:</b>{' '}
               {s.nisar_passes_used ? `${s.nisar_passes_used}, covers ${s.nisar_coverage_pct?.toFixed(0)}%` : 'not used'}
@@ -594,6 +639,20 @@ ${err instanceof Error ? err.message : err}`)
               <b>Burn scars (Sentinel-2):</b>{' '}
               {s.s2_clear_pct !== undefined ? `${s.s2_burned_pct}% burned, ${s.s2_clear_pct}% clear view` : 'not used'}
             </p>
+            {s.weather_timeline && s.weather_timeline.length > 1 && (
+              <p className="note">
+                <b>Forecast evolution ({s.weather_timeline.length}h):</b>{' '}
+                {s.weather_timeline.slice(0, 6).map((w) => {
+                  const hh = w.time_utc.slice(11, 16)
+                  const ws = w.wind_speed_ms != null ? `${w.wind_speed_ms.toFixed(1)} m/s` : ''
+                  const wd = w.wind_dir_deg != null ? `@${w.wind_dir_deg.toFixed(0)}°` : ''
+                  const tc = w.temp_c != null ? `, ${w.temp_c.toFixed(0)}°C` : ''
+                  const rh = w.rh_pct != null ? `/${w.rh_pct.toFixed(0)}%RH` : ''
+                  return `${hh}Z (${ws}${wd}${tc}${rh})`
+                }).join(' → ')}
+                {s.weather_timeline.length > 6 ? ' …' : ''}
+              </p>
+            )}
             {[s.weather_note, ...s.notes].filter(Boolean).map((note, i) => (
               <p key={i} className="note">Note: {note}</p>
             ))}

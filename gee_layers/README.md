@@ -117,9 +117,11 @@ Output contract (all functions):
 | `rtma` (default) | NOAA RTMA hourly analysis, 2.5 km | US | hindcasts, "now" |
 | `era5_land` | ECMWF ERA5-Land hourly, ~11 km, a few days behind | global | Europe (Ávila, Le Porge) |
 | `gfs` | NOAA GFS 0.25° forecast | global | live predictions (future hours) |
+| `meteomatics` | Meteomatics Weather API (EURO1k / US1k / mix, 1 km) | global | high-resolution historical, real-time & future forecast weather |
 
 Every weather source gives `temp_c`, `rh_pct`, `wind_u_ms`, `wind_v_ms`, `wind_speed_ms`, `wind_dir_deg`.
 `rtma` and `gfs` add `gust_ms` and `precip_mm`. `era5_land` adds `precip_mm` and `soil_moisture`.
+`meteomatics` provides `temp_c`, `rh_pct`, `wind_u_ms`, `wind_v_ms`, `gust_ms`, `precip_mm`, `soil_moisture`, and `fosberg_fwi` (with automatic license-tier fallback if an account restricts specialized indices). Set `METEOMATICS_USERNAME` and `METEOMATICS_PASSWORD` in `gee_layers/.env` (or `real_fires/.env`).
 Switching source therefore needs no change in the model code.
 
 Conventions worth knowing:
