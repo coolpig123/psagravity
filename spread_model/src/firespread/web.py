@@ -3,17 +3,21 @@
 backend/server.py serves it as POST /api/predict:
 
     body = {"polygon": <GeoJSON>, "start": "2026-08-09T21:00Z",
-            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "steps": 30}
+            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "active_front": true,
+            "steps": 30}
 
     -> {"cells":   GeoJSON FeatureCollection, one square per cell with burn_prob > MIN_PROB: the chance the
                    cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer,
         "bounds":  [west, south, east, north] of the model grid,
         "summary": {main_direction, main_direction_deg, direction_strength, expected_new_area_km2,
                     weather_time_utc, weather_source, nisar_passes_used, nisar_coverage_pct, s2_clear_pct,
-                    s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, max_prob, text, notes}}
+                    s2_burned_pct, sim_steps, sim_expected_area_km2, active_front_cells, active_front_source,
+                    n_cells, max_prob, text, notes}}
                    (main_direction / expected_new_area_km2 are for the next single step)
 
-Only the polygon + radius_km is fetched from Earth Engine and NISAR (see predict()).
+Only the polygon + radius_km is fetched from Earth Engine and NISAR (see predict()). With "active_front" (default on),
+VIIRS hotspots from NASA FIRMS in the 24 h before `start` pick the edges that spread (active_front.py); without
+FIRMS_MAP_KEY or hotspots the whole polygon spreads and summary.notes says why.
 """
 from __future__ import annotations
 
@@ -34,7 +38,8 @@ RES_RANGE_M = (20.0, 1000.0)
 SUMMARY_KEYS = ("main_direction", "main_direction_deg", "direction_strength", "expected_new_area_km2",
                 "expected_new_cells", "time_utc", "weather_time_utc", "weather_source", "weather_note",
                 "nisar_passes_used", "nisar_coverage_pct", "nisar_alignment", "s2_clear_pct", "s2_burned_pct",
-                "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge")
+                "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge",
+                "active_front_cells", "active_front_source")
 
 
 def parse_request(body: dict) -> dict:
@@ -65,7 +70,8 @@ def parse_request(body: dict) -> dict:
             "radius_km": number("radius_km", 5.0, 0.1, MAX_RADIUS_KM),
             "res_m": number("res_m", 100.0, *RES_RANGE_M),
             "steps": int(number("steps", DEFAULT_STEPS, 1, MAX_STEPS)),
-            "use_nisar": bool(body.get("use_nisar", True)), "burn_scars": bool(body.get("burn_scars", True))}
+            "use_nisar": bool(body.get("use_nisar", True)), "burn_scars": bool(body.get("burn_scars", True)),
+            "active_front": bool(body.get("active_front", True))}
 
 
 def default_nisar_provider():
@@ -161,7 +167,7 @@ def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nis
         except ImportError as e:
             notes.append(f"NISAR skipped: the NISAR reader is not installed (pip install -e real_fires): {e}")
     result = predict_fn(polygon=req["polygon"], start=req["start"], nisar=nisar, burn_scars=req["burn_scars"],
-                        radius_km=req["radius_km"], res_m=req["res_m"])
+                        radius_km=req["radius_km"], res_m=req["res_m"], active_front=req["active_front"], notes=notes)
     result = simulate_spread(result, steps=req["steps"])
     if result.attrs.get("sim_reached_grid_edge"):
         notes.append(f"the simulated fire reached the edge of the {req['radius_km']:g} km area around the polygon; "
