@@ -28,6 +28,11 @@ CURRENT_DAYS = 30           # latest clear pixel within this many days before t
 REFERENCE_HALF_DAYS = 30    # reference = t - 365 d +- this
 NATIVE_RES_M = 20.0         # B8A / B12
 _SCL_CLEAR = [4, 5, 6, 7, 11]   # vegetation, bare, water, unclassified, snow (drops cloud, shadow, saturated)
+# The dNBR image is heavy to compute (a median over ~100 scenes), not to transfer, so it is requested in 256-cell
+# tiles that Earth Engine computes in parallel, instead of one big tile. Same pixels; measured on the Bug Fire
+# (675 x 640 cells at 20 m): 54 s as one tile -> 14 s as 9 tiles.
+TILE_CELLS = 256
+TILE_WORKERS = 16
 
 
 def scars_from_dnbr(dnbr: np.ndarray, threshold: float = DNBR_THRESHOLD) -> np.ndarray:
@@ -117,9 +122,10 @@ def optical_burn_scars(inputs: xr.Dataset, time=None, threshold: float = DNBR_TH
         return out
     fine = _fine_grid(grid)
     if fine is not None:
-        dnbr = _block_mean(download(dnbr_img, fine, ["dnbr"])[0], fine.width // grid.width)
+        dnbr = _block_mean(download(dnbr_img, fine, ["dnbr"], workers=TILE_WORKERS,
+                                    max_bytes=4 * TILE_CELLS * TILE_CELLS)[0], fine.width // grid.width)
     else:      # already ~20 m, not a multiple of 20 m, or the 20 m grid would be too big: sample at model cells
-        dnbr = download(dnbr_img, grid, ["dnbr"])[0]
+        dnbr = download(dnbr_img, grid, ["dnbr"], workers=TILE_WORKERS, max_bytes=4 * TILE_CELLS * TILE_CELLS)[0]
     out["s2_dnbr"] = (("y", "x"), dnbr.astype(np.float32), {"units": "1", "long_name": "Sentinel-2 dNBR"})
     out["s2_burned"] = (("y", "x"), scars_from_dnbr(dnbr, threshold),
                         {"long_name": "Sentinel-2 burn scar (1), not (0), no clear observation (-1)"})

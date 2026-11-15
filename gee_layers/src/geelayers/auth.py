@@ -9,6 +9,7 @@ login in the browser if this computer has never logged in. Override in gee_layer
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,6 +26,7 @@ DEFAULT_PROJECT = "wildfire-hackathon-514520"
 HIGH_VOLUME_URL = "https://earthengine-highvolume.googleapis.com"
 
 _initialized = False
+_init_lock = threading.Lock()     # init() may be called from several threads at once (parallel fetches)
 
 
 def _has_saved_login() -> bool:
@@ -36,6 +38,14 @@ def init(project: str | None = None, force: bool = False) -> None:
     global _initialized
     if _initialized and not force:
         return
+    with _init_lock:
+        if _initialized and not force:      # another thread finished while this one waited
+            return
+        _initialize(project)
+        _initialized = True
+
+
+def _initialize(project: str | None) -> None:
     project = project or os.environ.get("EE_PROJECT") or DEFAULT_PROJECT
     key = os.environ.get("EE_SERVICE_ACCOUNT_KEY")
     if key:
@@ -54,4 +64,3 @@ def init(project: str | None = None, force: bool = False) -> None:
                 if "permission" in str(e).lower() or "403" in str(e) else
                 "Run `earthengine authenticate` again, and check that the project is registered for Earth Engine.")
         raise RuntimeError(f"Earth Engine init failed for project {project!r}: {e}\n{hint}") from e
-    _initialized = True

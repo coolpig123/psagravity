@@ -1,6 +1,9 @@
 """From a fire polygon (or ignition point) to spread probabilities, fetching only the data around it."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
+import pandas as pd
 import xarray as xr
 
 from .active_front import DEFAULT_LOOKBACK_H, attach_active_front
@@ -32,16 +35,54 @@ def predict(polygon=None, point=None, start=None, *, inputs: xr.Dataset | None =
     the whole polygon spreads, and the reason is appended to `notes` and attrs["active_front_note"].
     """
     fetched = inputs is None
-    if fetched:
-        from geelayers import get_fire_inputs   # only needed when fetching
-        fetch_kwargs.setdefault("layers", MODEL_LAYERS)
-        inputs = get_fire_inputs(polygon=polygon, point=point, start=start, hours=hours,
-                                 radius_km=radius_km, res_m=res_m, **fetch_kwargs)
-    if burn_scars if burn_scars is not None else fetched:
-        from .burn_scars import optical_burn_scars
-        inputs = optical_burn_scars(inputs, time=start or inputs.attrs.get("time_utc"))
-    inputs = attach_nisar(inputs, nisar)
-    t = start or inputs.attrs.get("time_utc")
-    if (active_front if active_front is not None else fetched) and t is not None and "active_front" not in inputs:
-        inputs = attach_active_front(inputs, t, lookback_h=lookback_h, notes=notes)
+    want_scars = burn_scars if burn_scars is not None else fetched
+    scars = pool = None
+    try:
+        if fetched:
+            from geelayers import get_fire_inputs   # only needed when fetching
+            fetch_kwargs.setdefault("layers", MODEL_LAYERS)
+            grid = _fire_grid(polygon, point, start, radius_km, res_m, fetch_kwargs) if want_scars else None
+            if grid is not None:
+                # The burn scars are the slowest fetch (~15 s of Earth Engine computing) and need only the grid:
+                # start them now, so they run while the layers, the weather, NISAR and FIRMS are fetched.
+                from . import burn_scars as bs
+                pool = ThreadPoolExecutor(1)
+                stub = xr.Dataset(coords={"y": grid.y, "x": grid.x}, attrs={"crs": grid.crs, "res_m": grid.res})
+                scars = pool.submit(bs.optical_burn_scars, stub, time=start)
+                fetch_kwargs["grid"] = grid
+            inputs = get_fire_inputs(polygon=polygon, point=point, start=start, hours=hours,
+                                     radius_km=radius_km, res_m=res_m, **fetch_kwargs)
+        if want_scars and scars is None:
+            from .burn_scars import optical_burn_scars
+            inputs = optical_burn_scars(inputs, time=start or inputs.attrs.get("time_utc"))
+        inputs = attach_nisar(inputs, nisar)
+        t = start or inputs.attrs.get("time_utc")
+        if (active_front if active_front is not None else fetched) and t is not None and "active_front" not in inputs:
+            inputs = attach_active_front(inputs, t, lookback_h=lookback_h, notes=notes)
+        if scars is not None:                       # same grid: copy the s2_ layers and attrs over
+            done = scars.result()
+            inputs = inputs.copy()
+            for name in done.data_vars:
+                inputs[name] = (done[name].dims, done[name].values, done[name].attrs)
+            inputs.attrs.update({k: v for k, v in done.attrs.items() if k.startswith("s2_")})
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)   # an error elsewhere does not wait for the scars
     return spread_probabilities(inputs, time=time or start, params=params)
+
+
+def _fire_grid(polygon, point, start, radius_km: float, res_m: float, fetch_kwargs: dict):
+    """The grid get_fire_inputs would build for this fire (it is then passed to it, so both use the same one).
+    None when the caller gave its own grid / bbox, or there is nothing to build it from."""
+    if "grid" in fetch_kwargs or fetch_kwargs.get("bbox") is not None or start is None:
+        return None
+    from geelayers import Grid
+    from geelayers.perimeter import resolve_perimeter
+    if polygon is not None and point is None:
+        t = pd.Timestamp(start)
+        t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+        outline, _ = resolve_perimeter(polygon, t, fetch_kwargs.get("perimeter_time_key"))
+        return Grid.from_polygon(outline, buffer_km=radius_km, res_m=res_m)
+    if point is not None and polygon is None:
+        return Grid.from_point(point[0], point[1], radius_km=radius_km, res_m=res_m)
+    return None
