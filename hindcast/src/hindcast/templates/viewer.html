@@ -1,0 +1,308 @@
+<title>Hindcast Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: incident-display night map. Header with the clock, map + side readouts, full-width
+   timeline scrubber underneath. Single dark theme by choice: hot spots read as light on dark. */
+:root {
+  color-scheme: dark;
+  --ground: #12100e;      /* page, warm near-black */
+  --panel: #1b1815;       /* map frame, panels */
+  --line: #332d27;        /* hairlines */
+  --ink: #eee8df;         /* primary text */
+  --ink-2: #b0a698;       /* secondary text */
+  --muted: #776e63;       /* axis labels */
+  --ember: #ff7a2f;       /* accent: active fire */
+  --hot: #ffe08a;         /* newest detections */
+  --char: #9b3a17;        /* burned / old detections */
+  --perim: #86b8ff;       /* FEDS perimeter */
+  --nisar: #b9a6ff;       /* NISAR passes */
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+[hidden] { display: none !important; }
+html, body { background: var(--ground); color: var(--ink); }
+body {
+  font: 14px/1.5 var(--body);
+  padding-block: 20px 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px 32px; }
+.pick { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--ink-2); font-size: 12.5px; }
+.pick select { font: 600 15px var(--body); }
+.title h1 { font: 600 40px/1 var(--display); letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.title p { margin: 6px 0 0; color: var(--ink-2); }
+.clock { text-align: right; font-variant-numeric: tabular-nums; }
+.clock .utc { font: 600 40px/1 var(--display); letter-spacing: 0.02em; }
+.clock .utc span { color: var(--muted); font-weight: 500; }
+.clock .sub { font: 400 13px/1.4 var(--mono); color: var(--ink-2); margin-top: 6px; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 16px; align-items: start; }
+@media (max-width: 880px) { .stage { grid-template-columns: minmax(0, 1fr); } .clock { text-align: left; } }
+
+.mapbox { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-inline: auto; width: 100%; }
+#map { display: block; width: 100%; height: auto; cursor: crosshair; }
+.tip { position: absolute; pointer-events: none; background: rgba(18, 16, 14, 0.94); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 12px/1.45 var(--mono); color: var(--ink); white-space: nowrap; z-index: 2; }
+.tip b { color: var(--hot); font-weight: 500; }
+.maplabel { position: absolute; left: 10px; top: 8px; font: 500 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); background: rgba(18,16,14,.7); padding: 5px 7px; border-radius: 3px; }
+
+.side { display: flex; flex-direction: column; gap: 14px; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.stat { background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat .k { font: 500 10.5px/1.3 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font: 600 26px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.stat .v small { font: 500 14px var(--display); color: var(--ink-2); margin-left: 2px; }
+.stat .n { font: 400 11.5px/1.35 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.stat.wide { grid-column: 1 / -1; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.panel h2 { font: 500 10.5px/1.3 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.layer { display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--ink); user-select: none; }
+.layer input { accent-color: var(--ember); width: 15px; height: 15px; margin: 0; }
+.layer .sw { width: 22px; height: 14px; flex: none; display: grid; place-items: center; }
+.layer .lbl { display: flex; flex-direction: column; line-height: 1.3; }
+.layer .lbl em { font-style: normal; font: 11.5px var(--mono); color: var(--ink-2); }
+.dot-new { width: 9px; height: 9px; border-radius: 50%; background: radial-gradient(circle, var(--hot) 0 35%, var(--ember) 70%); box-shadow: 0 0 6px var(--ember); }
+.dot-old { width: 5px; height: 5px; border-radius: 50%; background: var(--char); }
+.sq-goes { width: 12px; height: 12px; background: rgba(255,122,47,.45); border: 1px solid var(--ember); }
+.ln-feds { width: 20px; height: 10px; border: 1.5px solid var(--perim); background: rgba(134,184,255,.14); border-radius: 2px; }
+.ln-final { width: 20px; height: 0; border-top: 1.5px dashed var(--ink); }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+button.play { display: inline-flex; align-items: center; gap: 8px; background: var(--ember); color: #1a0d05; border: 0; border-radius: 4px; padding: 8px 14px; font: 600 15px/1 var(--display); letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+button.play:hover { filter: brightness(1.08); }
+button.play svg { width: 12px; height: 12px; fill: currentColor; }
+.field { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12.5px; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: 13px var(--body); }
+@media (max-width: 600px), (pointer: coarse) { .hint { display: none; } }
+.hint { margin-left: auto; font: 11.5px var(--mono); color: var(--muted); }
+:focus-visible { outline: 2px solid var(--hot); outline-offset: 2px; }
+
+.timeline { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 0 2px; }
+#tl { display: block; width: 100%; height: 150px; cursor: ew-resize; touch-action: none; }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 4px 12px 8px; font: 11.5px var(--mono); color: var(--ink-2); }
+.tl-legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+
+footer { color: var(--ink-2); font-size: 12.5px; display: grid; gap: 6px; max-width: 75ch; }
+footer p { margin: 0; }
+footer strong { color: var(--ink); font-weight: 500; }
+/* hindcast additions (same tokens as the real_fires page) */
+.ln-t12 { width: 20px; height: 0; border-top: 2px dashed var(--hot); }
+.ln-t24 { width: 20px; height: 0; border-top: 2px solid var(--hot); }
+.ln-start { width: 20px; height: 10px; border: 1.5px solid var(--perim); background: rgba(134,184,255,.25); border-radius: 2px; }
+.ramp { width: 22px; height: 10px; background: linear-gradient(90deg, #5a1d08, var(--char), var(--ember), var(--hot)); border-radius: 2px; }
+input[type=range] { flex: 1 1 260px; accent-color: var(--ember); }
+table.sc { width: 100%; border-collapse: collapse; font: 12.5px var(--mono); font-variant-numeric: tabular-nums; }
+table.sc th { text-align: right; font: 500 10.5px var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 3px 4px; }
+table.sc td { text-align: right; padding: 3px 4px; border-top: 1px solid var(--line); }
+table.sc td:first-child, table.sc th:first-child { text-align: left; color: var(--ink-2); }
+td.win { color: var(--hot); } td.lose { color: var(--ink-2); }
+.note { font: 11.5px/1.45 var(--mono); color: var(--ink-2); margin: 0; }
+.warn { color: var(--ember); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="title">
+      <div class="pick"><label for="win-pick">Fire · window</label><select id="win-pick"></select></div>
+      <h1 id="f-name">Hindcast</h1>
+      <p id="f-sub">&nbsp;</p>
+    </div>
+    <div class="clock" aria-live="polite">
+      <div class="utc" id="clock">—</div>
+      <div class="sub" id="clock-sub">&nbsp;</div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <button class="play" id="play" type="button" aria-label="Play">
+      <svg viewBox="0 0 12 12"><path id="play-icon" d="M2 1l9 5-9 5z"/></svg><span id="play-label">Play</span>
+    </button>
+    <input type="range" id="slider" min="0" max="1" value="0" step="1" aria-label="Simulation step">
+    <label class="field" for="speed">Speed
+      <select id="speed"><option value="2">2 steps/s</option><option value="6" selected>6 steps/s</option><option value="20">20 steps/s</option></select>
+    </label>
+    <span class="hint">Space: play · ← →: 1 step</span>
+  </div>
+
+  <div class="stage">
+    <div class="mapbox">
+      <canvas id="map" aria-label="Hindcast map"></canvas>
+      <div class="maplabel" id="maplabel">model vs FEDS</div>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <div class="side">
+      <div class="stats" id="stats"></div>
+      <div class="panel">
+        <h2>Scores · new burned area</h2>
+        <table class="sc" id="scores"></table>
+        <p class="note" id="score-note"></p>
+      </div>
+      <div class="panel">
+        <h2>Layers</h2>
+        <label class="layer"><input type="checkbox" id="L-prob" checked><span class="sw"><i class="ramp"></i></span><span class="lbl">Model burn probability<em>cells ignited by the current step</em></span></label>
+        <label class="layer"><input type="checkbox" id="L-thr"><span class="sw"></span><span class="lbl">Only ≥ threshold<em id="thr-lbl"></em></span></label>
+        <label class="layer"><input type="checkbox" id="L-start" checked><span class="sw"><i class="ln-start"></i></span><span class="lbl">Start perimeter (FEDS, t)</span></label>
+        <label class="layer"><input type="checkbox" id="L-t12" checked><span class="sw"><i class="ln-t12"></i></span><span class="lbl">Observed FEDS ≈ t+12 h</span></label>
+        <label class="layer"><input type="checkbox" id="L-t24" checked><span class="sw"><i class="ln-t24"></i></span><span class="lbl">Observed FEDS ≈ t+24 h</span></label>
+        <label class="layer"><input type="checkbox" id="L-wind" checked><span class="sw">➜</span><span class="lbl">Wind used by the model<em id="wind-lbl"></em></span></label>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <p><strong>Scores are vs FEDS, not the official area.</strong> FEDS (VIIRS-modeled perimeters) under-maps the official WFIGS perimeter (Bug 37.8 %, Biscar 11.2 % of official), so a predicted cell outside FEDS is not necessarily wrong.</p>
+    <p id="cal-note"></p>
+    <p>The model holds the start-hour weather for the whole run (spread_model/simulate.py); see hindcast/SUGGESTIONS.md. Stale targets (FEDS had no new data) are drawn but not scored. Colwash is left out (FEDS IoU vs WFIGS 2.9 %).</p>
+  </footer>
+</div>
+
+<script type="application/json" id="hc-data">__DATA__</script>
+<script>
+(() => {
+const D = JSON.parse(document.getElementById("hc-data").textContent);
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const dec = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const fmtT = ms => new Date(ms).toISOString().slice(5, 16).replace("T", " ");
+const pct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
+const canvas = $("map"), ctx = canvas.getContext("2d");
+let W, step = 0, playing = false, timer = null, bg = null, heat = null, heatCtx = null, prob, arrival;
+
+// one option per window, grouped by fire
+const groups = {};
+D.windows.forEach((w, i) => (groups[w.fire] = groups[w.fire] || []).push([w, i]));
+for (const [fire, ws] of Object.entries(groups)) {
+  const og = document.createElement("optgroup"); og.label = fire;
+  ws.forEach(([w, i]) => { const o = new Option(`${fmtT(Date.parse(w.start_utc))} UTC · ${w.start_km2} km²`, i); og.append(o); });
+  $("win-pick").append(og);
+}
+const c = D.calibration;
+$("cal-note").textContent = `Calibrated on ${c.window}: ${c.hours_per_step} h per CA step, burn_prob threshold ${c.threshold} (mean IoU of new area ${c.mean_iou_new}). Held fixed for all other windows.`;
+
+function load(i) {
+  W = D.windows[i]; stop(); step = 0;
+  prob = dec(W.prob); arrival = dec(W.arrival);
+  const scale = Math.max(1, Math.floor(Math.min(1000, canvas.parentElement.clientWidth || 900) / W.w));
+  canvas.width = W.w * scale; canvas.height = W.h * scale;
+  heat = document.createElement("canvas"); heat.width = W.w; heat.height = W.h; heatCtx = heat.getContext("2d");
+  bg = null; if (W.basemap) { bg = new Image(); bg.onload = draw; bg.src = W.basemap; }
+  $("slider").max = W.steps; $("slider").value = 0;
+  $("f-name").textContent = `${W.fire.replace("_fire", "").replace(/^./, s => s.toUpperCase())} Fire hindcast`;
+  $("f-sub").textContent = `Start: FEDS perimeter ${fmtT(Date.parse(W.start_utc))} UTC, ${W.start_km2} km² · ${W.w}×${W.h} cells of ${W.res_m} m`;
+  $("thr-lbl").textContent = `burn_prob ≥ ${W.threshold} (calibrated)`;
+  $("wind-lbl").textContent = `from ${W.wind.from_deg}° at ${W.wind.speed} m/s (${W.wind.time_utc.slice(5, 16)} UTC), whole run`;
+  renderScores(); draw();
+}
+
+function renderScores() {
+  const rows = W.scores.sort((a, b) => a.horizon_h - b.horizon_h);
+  const head = `<tr><th></th>${rows.map(r => `<th>+${r.hours} h</th>`).join("")}</tr>`;
+  const line = (label, f) => `<tr><td>${label}</td>${rows.map(f).join("")}</tr>`;
+  const cmp = (m, b) => `<td class="${m > b ? "win" : "lose"}">${pct(m)}</td>`;
+  $("scores").innerHTML = rows.length ? head +
+    line("IoU model", r => cmp(r.iou, r.base_iou)) + line("IoU circle", r => `<td>${pct(r.base_iou)}</td>`) +
+    line("Precision model", r => cmp(r.precision, r.base_precision)) + line("Precision circle", r => `<td>${pct(r.base_precision)}</td>`) +
+    line("Recall model", r => cmp(r.recall, r.base_recall)) + line("Recall circle", r => `<td>${pct(r.base_recall)}</td>`) +
+    line("IoU circle, obs. area", r => `<td>${pct(r.oracle_iou)}</td>`) +
+    line("New area pred.", r => `<td>${r.pred_new_km2.toFixed(1)} km²</td>`) +
+    line("New area obs.", r => `<td>${r.obs_new_km2.toFixed(1)} km²</td>`) : "";
+  const stale = W.targets.filter(t => t.stale).map(t => `+${t.horizon_h} h`);
+  const edge = rows.some(r => r.reached_grid_edge);
+  $("score-note").innerHTML = (rows.length ? "Highlighted: model beats the same-area circle. " : "No scored target. ") +
+    (stale.length ? `<span class="warn">Not scored (stale FEDS): ${stale.join(", ")}.</span> ` : "") +
+    (edge ? `<span class="warn">Simulation reached the grid edge.</span>` : "");
+}
+
+function stats() {
+  const t0 = Date.parse(W.start_utc), now = t0 + step * W.hours_per_step * 3600e3;
+  let n = 0; for (let k = 0; k < arrival.length; k++) if (arrival[k] <= step && prob[k] >= W.threshold * 100) n++;
+  const km2 = n * W.res_m * W.res_m / 1e6;
+  $("clock").innerHTML = `${fmtT(now)} <span>UTC</span>`;
+  $("clock-sub").textContent = `step ${step} / ${W.steps} · +${(step * W.hours_per_step).toFixed(1)} h after start`;
+  const tg = W.targets.map(t => `<div class="stat"><span class="k">Observed +${t.horizon_h} h</span><span class="v">${t.area_km2}<small>km²</small></span><span class="n">${fmtT(Date.parse(t.time_utc))}${t.stale ? " · stale" : ""}</span></div>`).join("");
+  $("stats").innerHTML = `<div class="stat"><span class="k">Predicted (≥ thr)</span><span class="v">${(W.start_km2 + km2).toFixed(1)}<small>km²</small></span><span class="n">start + ${km2.toFixed(1)} new</span></div>` +
+    `<div class="stat"><span class="k">Start</span><span class="v">${W.start_km2}<small>km²</small></span><span class="n">FEDS at t</span></div>` + tg;
+}
+
+function ring(rings, fill, stroke, dash, s) {
+  ctx.beginPath();
+  for (const r of rings) r.forEach(([x, y], k) => k ? ctx.lineTo(x * s, y * s) : ctx.moveTo(x * s, y * s));
+  if (fill) { ctx.fillStyle = fill; ctx.fill("evenodd"); }
+  ctx.setLineDash(dash); ctx.strokeStyle = stroke; ctx.lineWidth = 1.6; ctx.stroke(); ctx.setLineDash([]);
+}
+
+function draw() {
+  const s = canvas.width / W.w;
+  ctx.fillStyle = css("--panel"); ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (bg && bg.complete) { ctx.globalAlpha = 0.55; ctx.drawImage(bg, 0, 0, canvas.width, canvas.height); ctx.globalAlpha = 1; }
+  if ($("L-prob").checked) {
+    const img = heatCtx.createImageData(W.w, W.h), d = img.data, thr = $("L-thr").checked ? W.threshold * 100 : 1;
+    for (let k = 0; k < prob.length; k++) {
+      if (arrival[k] > step || prob[k] < thr) continue;
+      const p = prob[k] / 100;   // dark char -> ember -> hot
+      d[4*k] = 90 + 165 * Math.min(1, p * 1.6); d[4*k+1] = 30 + 194 * Math.max(0, p - 0.4) / 0.6; d[4*k+2] = 8 + 130 * Math.max(0, p - 0.7);
+      d[4*k+3] = 90 + 150 * p;
+    }
+    heatCtx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false; ctx.drawImage(heat, 0, 0, canvas.width, canvas.height);
+  }
+  if ($("L-start").checked) ring(W.start_rings, "rgba(134,184,255,.25)", css("--perim"), [], s);
+  const tNow = step * W.hours_per_step;
+  for (const t of W.targets) {
+    if (!$(`L-t${t.horizon_h}`).checked) continue;
+    ctx.globalAlpha = t.stale ? 0.4 : 1;
+    ring(t.rings, null, css("--hot"), t.horizon_h === 12 ? [6, 4] : [], s);
+    ctx.globalAlpha = 1;
+  }
+  if ($("L-wind").checked && W.wind.speed > 0) {   // arrow toward where the wind blows
+    const x = canvas.width - 54, y = 54, L = 18 + 4 * Math.min(W.wind.speed, 8), a = Math.atan2(-W.wind.v, W.wind.u);
+    ctx.save(); ctx.translate(x, y); ctx.fillStyle = "rgba(18,16,14,.75)"; ctx.beginPath(); ctx.arc(0, 0, 42, 0, 7); ctx.fill();
+    ctx.rotate(a); ctx.strokeStyle = ctx.fillStyle = css("--ink"); ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-L / 2, 0); ctx.lineTo(L / 2 - 6, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(L / 2, 0); ctx.lineTo(L / 2 - 10, -6); ctx.lineTo(L / 2 - 10, 6); ctx.fill(); ctx.restore();
+    ctx.fillStyle = css("--ink-2"); ctx.font = "11px " + css("--mono"); ctx.textAlign = "center"; ctx.fillText(`${W.wind.speed} m/s`, x, y + 36);
+  }
+  // scale bar: 5 km
+  const px = 5000 / W.res_m * s; ctx.fillStyle = css("--ink"); ctx.fillRect(14, canvas.height - 18, px, 3);
+  ctx.font = "11px " + css("--mono"); ctx.textAlign = "left"; ctx.fillText("5 km", 14, canvas.height - 24);
+  stats();
+}
+
+function setStep(k) { step = Math.max(0, Math.min(W.steps, k)); $("slider").value = step; draw(); }
+function stop() { playing = false; clearInterval(timer); $("play-label").textContent = "Play"; $("play-icon").setAttribute("d", "M2 1l9 5-9 5z"); }
+function play() {
+  if (playing) return stop();
+  if (step >= W.steps) setStep(0);
+  playing = true; $("play-label").textContent = "Pause"; $("play-icon").setAttribute("d", "M2 1h3v10H2zM7 1h3v10H7z");
+  timer = setInterval(() => step >= W.steps ? stop() : setStep(step + 1), 1000 / +$("speed").value);
+}
+$("play").onclick = play;
+$("speed").onchange = () => { if (playing) { stop(); play(); } };
+$("slider").oninput = e => setStep(+e.target.value);
+$("win-pick").onchange = e => load(+e.target.value);
+document.querySelectorAll(".layer input").forEach(el => el.onchange = draw);
+addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  if (e.code === "Space") { e.preventDefault(); play(); }
+  if (e.key === "ArrowRight") setStep(step + 1);
+  if (e.key === "ArrowLeft") setStep(step - 1);
+});
+canvas.onmousemove = e => {
+  const r = canvas.getBoundingClientRect(), x = Math.floor((e.clientX - r.left) / r.width * W.w), y = Math.floor((e.clientY - r.top) / r.height * W.h);
+  const k = y * W.w + x, tip = $("tip");
+  if (x < 0 || y < 0 || x >= W.w || y >= W.h || prob[k] === 0) { tip.hidden = true; return; }
+  const t = Date.parse(W.start_utc) + arrival[k] * W.hours_per_step * 3600e3;
+  tip.innerHTML = `burn_prob <b>${prob[k]}%</b><br>arrives step ${arrival[k]} · ${fmtT(t)} UTC`;
+  tip.style.left = (e.clientX - r.left + 12) + "px"; tip.style.top = (e.clientY - r.top + 12) + "px"; tip.hidden = false;
+};
+canvas.onmouseleave = () => { $("tip").hidden = true; };
+load(0);
+})();
+</script>
