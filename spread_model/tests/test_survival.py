@@ -104,6 +104,7 @@ def toy_samples(n=4000, seed=0, starts=2):
     d = rng.uniform(100, 20_000, n)
     along = rng.uniform(-5, 5, n)
     df["path_len_m"], df["path_steps"], df["path_wind_along_ms"] = d, d / 100, along
+    df["barrier_dist_m"] = d * rng.uniform(0.9, 1.0, n)            # straight-ish: a little shorter than the path
     t = d / 1000 / np.where(along > 0, 1.0, 0.25)
     burned = d < 12_000
     df["lower_h"] = np.where(burned, np.maximum(np.floor(t / 2) * 2, survival.MIN_HOURS), 40.0)
@@ -281,3 +282,36 @@ def test_arrival_quantiles_agree_with_the_chances(toy_model):
     t50 = res["arrival_h"].values[m]
     assert np.all((p6 >= 0.5 * pe_ - 1e-4) == (t50 <= 6 + 1e-3)) or np.allclose(p6 / pe_, 0.5, atol=1e-3)
     assert (res["arrival_h_q25"].values[m] <= t50 + 1e-6).all() and (t50 <= res["arrival_h_q75"].values[m] + 1e-6).all()
+
+
+def test_barrier_distance_goes_round_walls():
+    ds = make_ds(u=8.0)                                                 # strong wind east: path cost is lopsided
+    f = cell_features(spread_probabilities(ds))
+    assert f["barrier_dist_m"][C, C + 3] == pytest.approx(300.0) and f["barrier_dist_m"][C, C - 3] == pytest.approx(300.0)
+    lc = np.full((N, N), 20, np.int16)
+    lc[:, C + 2] = 80
+    lc[0, C + 2] = 20                                                   # a river with one crossing at the top
+    ds["landcover"] = (("y", "x"), lc)
+    f = cell_features(spread_probabilities(ds))
+    assert f["barrier_dist_m"][C, C + 3] > 1000                         # round the river, not across it
+
+
+def test_anchor_on_two_terms():
+    df, t, burned = toy_samples()
+    model = fit(df, None, 0, terms=("path_steps", "barrier_dist_m"))
+    assert model.anchor["terms"] == ["path_steps", "barrier_dist_m"] and len(model.anchor["time"]) == 3
+    X = df[list(FEATURES)].to_numpy(np.float32)
+    ok = burned & (t < 30)
+    assert np.median(np.abs(np.log(model.median_if_burns(X)[ok]) - np.log(t[ok]))) < 1.0
+
+
+def test_quantiles_survive_flat_calibration_steps():
+    # calibrated staircases: 24 h and 48 h on the same step, 6 h and 12 h on the same step
+    pe = np.array([0.5, 0.5])
+    probs = {"ever": pe, 6: np.array([0.30, 0.05]), 12: np.array([0.30, 0.10]), 24: np.array([0.40, 0.12]),
+             48: np.array([0.45, 0.12])}
+    q = survival.arrival_quantiles(probs, sigma=1.0)
+    assert np.isfinite(q[0.5]).all() and np.isfinite(q[0.75]).all()    # not "no estimate" on a flat 24-48 h step
+    assert (q[0.25] < 6).all() or q[0.25][0] < q[0.5][0]                # no collapse onto 6 h
+    assert q[0.25][0] < q[0.5][0] < q[0.75][0] and q[0.25][1] < q[0.5][1] < q[0.75][1]
+    assert (q[0.75] < 24 * 60).all()                                    # no months from a microscopic slope

@@ -76,10 +76,15 @@ VALID_FIRES = ("crosswhite",)
 HORIZONS_H = (6, 12, 24, 48)
 
 # features: same code for training and for the website, so they always match
-FEATURES = ("path_steps", "path_len_m", "path_up_m", "path_down_m", "path_wind_along_ms", "path_p_veg")
+FEATURES = ("path_steps", "path_len_m", "path_up_m", "path_down_m", "path_wind_along_ms", "path_p_veg",
+            "barrier_dist_m")
+# Terms the anchor lines may use (ln of each); train() picks the set held out. path_steps carries the start-hour
+# wind and slope; barrier_dist_m is the plain distance around barriers, which the wind of one hour does not bend
+# (over 1-2 days the wind turns, and straight-line distance ranked the Bug Fire better than the wind-shaped cost).
+ANCHOR_CHOICES = (("path_steps",), ("barrier_dist_m",), ("path_steps", "barrier_dist_m"))
 # sign of the effect on the arrival time (+1 = later); the "ever burns" classifier gets the opposite sign
 MONOTONE_TIME = {"path_steps": 1, "path_len_m": 1, "path_up_m": -1, "path_down_m": 1,
-                 "path_wind_along_ms": -1, "path_p_veg": -1}
+                 "path_wind_along_ms": -1, "path_p_veg": -1, "barrier_dist_m": 1}
 P_MIN = 1e-4              # spread rates below this are no path (cost > 10,000 steps)
 
 # labels / samples
@@ -145,7 +150,7 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
     res = float(result.attrs.get("res_m", abs(float(result.x[1] - result.x[0]))))
     p = path_spread_rate(result)
     idx = np.arange(n).reshape(h, w)
-    src, dst, cost = [], [], []
+    src, dst, cost, step_len = [], [], [], []
     for k, (_, dr, dc, _) in enumerate(DIRECTIONS):
         r0, r1, c0, c1 = max(0, -dr), h - max(0, dr), max(0, -dc), w - max(0, dc)
         pk = p[k, r0:r1, c0:c1]
@@ -153,13 +158,18 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
         src.append(idx[r0:r1, c0:c1][m])
         dst.append(idx[r0 + dr:r1 + dr, c0 + dc:c1 + dc][m])
         cost.append(1.0 / pk[m])               # CA steps to cross: the expected wait 1/p of a cell that keeps trying
-    graph = csr_matrix((np.concatenate(cost), (np.concatenate(src), np.concatenate(dst))), shape=(n, n))
+        step_len.append(np.full(int(m.sum()), res * math.hypot(dr, dc)))
+    src, dst = np.concatenate(src), np.concatenate(dst)
+    graph = csr_matrix((np.concatenate(cost), (src, dst)), shape=(n, n))
 
     nan = np.full((h, w), np.nan, np.float32)
     front = idx[burning].ravel()
     if front.size == 0 or graph.nnz == 0:
         return {k: nan.copy() for k in FEATURES}
     steps, pred, _ = dijkstra(graph, directed=True, indices=front, min_only=True, return_predecessors=True)
+    # same edges (only into cells that can burn), cost = metres: the shortest way round the barriers
+    around = dijkstra(csr_matrix((np.concatenate(step_len), (src, dst)), shape=(n, n)), directed=True,
+                      indices=front, min_only=True)
 
     # the edge into every node: from pred[j] to j
     has = pred >= 0
@@ -189,6 +199,7 @@ def cell_features(result: xr.Dataset, time_utc=None) -> dict[str, np.ndarray]:
         "path_down_m": _sum_along_paths(pred, np.maximum(-rise, 0)),
         "path_wind_along_ms": _sum_along_paths(pred, along) / safe,
         "path_p_veg": _sum_along_paths(pred, veg) / safe,
+        "barrier_dist_m": around,
     }
     return {k: np.where(reached, out[k], np.nan).reshape(h, w).astype(np.float32) for k in FEATURES}
 
@@ -200,17 +211,25 @@ def feature_matrix(features: dict[str, np.ndarray], select: np.ndarray | None = 
 
 # ---- the model --------------------------------------------------------------------------------
 
-def _log_steps(X: np.ndarray) -> np.ndarray:
-    """ln(path_steps), the physics term both parts are anchored on (column 0 of the feature matrix)."""
-    return np.log(np.maximum(np.asarray(X, np.float64)[:, FEATURES.index("path_steps")], 1e-3))
+def _log_terms(X: np.ndarray, terms) -> np.ndarray:
+    """(n, len(terms)): ln of each anchor term (columns of the feature matrix)."""
+    X = np.asarray(X, np.float64)
+    return np.stack([np.log(np.maximum(X[:, FEATURES.index(k)], 1e-3)) for k in terms], axis=1)
+
+
+def _line(coef, X: np.ndarray, terms) -> np.ndarray:
+    """coef[0] + sum_k coef[k] ln(term_k)."""
+    return coef[0] + _log_terms(X, terms) @ np.asarray(coef[1:], np.float64)
 
 
 @dataclass
 class ArrivalModel:
     """Cure-fraction mixture, both parts anchored on the physics (the fastest-path cost):
 
-        logit P(ever burns) = c0 + c1 ln(path_steps) + cure trees(x)
-        ln median arrival   = t0 + t1 ln(path_steps) + time trees(x)      (AFT, normal, scale sigma)
+        logit P(ever burns) = c0 + sum_k c_k ln(term_k) + cure trees(x)
+        ln median arrival   = t0 + sum_k t_k ln(term_k) + time trees(x)      (AFT, normal, scale sigma)
+
+    terms = anchor["terms"]: path_steps and / or barrier_dist_m (ANCHOR_CHOICES, chosen held out).
 
     The two straight lines are fitted by maximum likelihood (fit_anchor); the trees (XGBoost, started from that
     margin with base_margin) only correct them, and may be None (0 rounds: physics curve only). Far outside the
@@ -218,7 +237,7 @@ class ArrivalModel:
     cure: object | None
     time: object | None
     sigma: float
-    anchor: dict = field(default_factory=lambda: {"cure": [0.0, 0.0], "time": [0.0, 1.0]})
+    anchor: dict = field(default_factory=lambda: {"terms": ["path_steps"], "cure": [0.0, 0.0], "time": [0.0, 1.0]})
     features: tuple[str, ...] = FEATURES
     meta: dict = field(default_factory=dict)
     # isotonic maps raw -> calibrated probability, learned from held-out fires: {"ever" | "<h>": [xs, ys]}
@@ -242,8 +261,7 @@ class ArrivalModel:
 
     def _margin(self, part: str, X: np.ndarray) -> np.ndarray:
         import xgboost as xgb
-        k0, k1 = self.anchor[part]
-        base = k0 + k1 * _log_steps(X)
+        base = _line(self.anchor[part], X, self.anchor["terms"])
         booster = self.cure if part == "cure" else self.time
         if booster is None:
             return base
@@ -311,42 +329,39 @@ def load_model(path: Path = MODEL_PATH) -> ArrivalModel:
     return _LOADED[path]
 
 
-def arrival_quantiles(probs: dict, qs=(0.25, 0.5, 0.75)) -> dict:
+def arrival_quantiles(probs: dict, qs=(0.25, 0.5, 0.75), sigma: float = 1.0) -> dict:
     """Quantiles (hours) of the arrival time if the cell burns, from the (calibrated) probabilities, so the times
     shown agree with the chances shown. F(h) = P(T <= h) / P(ever) at the HORIZONS_H; Phi^-1(F) is interpolated
-    linearly in ln h (exact for a log-normal) and extended with the slope of the first / last segment beyond them.
-    No path to the quantile (F never gets there) -> inf. Arrays of any shape; NaN in -> NaN out."""
+    linearly in ln h (exact for a log-normal). Before 6 h and after 48 h it is extended with the steepest of: the end
+    segment, the overall 6-48 h slope, and half the model's own slope 1 / sigma. The isotonic calibration is a
+    staircase, so an end segment is often flat or nearly so; extending a flat one gave "never" (inf) or 6 h for
+    everything, a nearly flat one months. Arrays of any shape; P(ever) = 0 -> inf; NaN in -> NaN out."""
     from scipy.special import ndtri
     pe = np.asarray(probs["ever"], np.float64)
     with np.errstate(invalid="ignore", divide="ignore"):
         F = np.stack([np.clip(np.asarray(probs[h], np.float64) / pe, 1e-4, 1 - 1e-4) for h in HORIZONS_H])
     Z = ndtri(F)                                                   # (horizon, ...)
     L = np.log(np.asarray(HORIZONS_H, np.float64)).reshape(-1, *([1] * pe.ndim))
-    out = {}
     n = len(HORIZONS_H)
-    s_first = (Z[1] - Z[0]) / (L[1] - L[0])
-    s_last = (Z[n - 1] - Z[n - 2]) / (L[n - 1] - L[n - 2])
-    for q in qs:
-        out[q] = _quantile(float(ndtri(q)), pe, Z, L, s_first, s_last, n)
-    return out
+    overall = (Z[n - 1] - Z[0]) / (L[n - 1] - L[0])
+    floor = 0.5 / max(float(sigma), 1e-3)
+    s_first = np.maximum.reduce([(Z[1] - Z[0]) / (L[1] - L[0]), overall, np.full(pe.shape, floor)])
+    s_last = np.maximum.reduce([(Z[n - 1] - Z[n - 2]) / (L[n - 1] - L[n - 2]), overall, np.full(pe.shape, floor)])
+    return {q: _quantile(float(ndtri(q)), pe, Z, L, s_first, s_last, n) for q in qs}
 
 
 def _quantile(zq, pe, Z, L, s_first, s_last, n):
-    """The hours at which Phi^-1(F) reaches zq (see arrival_quantiles)."""
+    """The hours at which Phi^-1(F) reaches zq (see arrival_quantiles); s_first, s_last > 0."""
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):   # np.where evaluates both branches
-        res = np.full(pe.shape, np.inf)
-        # already reached by the first horizon: extend the first segment down (or the first horizon if it is flat)
-        done = zq <= Z[0]
-        res = np.where(done, np.where(s_first > 1e-9, np.exp(L[0] + (zq - Z[0]) / np.maximum(s_first, 1e-9)),
-                                      np.exp(L[0])), res)
+        done = zq <= Z[0]                                          # reached by the first horizon: extend downwards
+        res = np.where(done, np.exp(L[0] + (zq - Z[0]) / s_first), np.inf)
         for k in range(n - 1):                                     # between horizons k and k+1
             hit = ~done & (zq <= Z[k + 1])
             frac = (zq - Z[k]) / np.maximum(Z[k + 1] - Z[k], 1e-12)
             res = np.where(hit, np.exp(L[k] + frac * (L[k + 1] - L[k])), res)
             done |= hit
-        # beyond the last horizon: extend the last segment up; flat -> never gets there (inf)
-        res = np.where(~done & (s_last > 1e-9), np.exp(L[n - 1] + (zq - Z[n - 1]) / np.maximum(s_last, 1e-9)), res)
-        res = np.where(np.isfinite(res), np.clip(res, 0.05, 24 * 60.0), res)   # 3 minutes .. 60 days
+        res = np.where(done, res, np.exp(L[n - 1] + (zq - Z[n - 1]) / s_last))   # beyond the last: extend upwards
+        res = np.clip(res, 0.05, 24 * 60.0)                        # 3 minutes .. 60 days
     res = res.reshape(pe.shape)
     res[~(pe > 0)] = np.inf
     res[np.isnan(pe)] = np.nan
@@ -371,7 +386,7 @@ def predict_arrival(result: xr.Dataset, time_utc=None, model: ArrivalModel | Non
     never = ~np.isfinite(feats["path_steps"]) | (result["mask_reason"].values != 0)
     for v in probs.values():
         v[never], v[burning] = 0.0, np.nan
-    quant = arrival_quantiles(probs)
+    quant = arrival_quantiles(probs, sigma=model.sigma)
     out = result.copy()
     out["p_ever"] = (("y", "x"), probs["ever"].astype(np.float32),
                      {"description": "chance the fire ever reaches the cell (survival.py)"})
@@ -554,7 +569,7 @@ def fire_samples(slug: str, cache: Path = CACHE_DIR, seed: int = 0) -> pd.DataFr
     from scipy.ndimage import distance_transform_edt
     from .alexandridis import spread_probabilities
     from .simulate import simulate_spread
-    path = cache / slug / f"samples_v3_{RES_M:g}m.parquet"
+    path = cache / slug / f"samples_v4_{RES_M:g}m.parquet"
     if path.exists():
         return pd.read_parquet(path)
     truth = load_truth(slug)
@@ -623,26 +638,30 @@ def _reachable(df: pd.DataFrame) -> np.ndarray:
     return np.isfinite(df["path_steps"].to_numpy())
 
 
-def fit_anchor(df: pd.DataFrame, sigma: float | None = None, truncate: bool | None = None) -> dict:
-    """Maximum-likelihood straight lines in x = ln(path_steps), on reachable cells:
-      cure: logit P(ever burns) = c0 + c1 x                      (weighted logistic likelihood)
-      time: ln T ~ Normal(t0 + t1 x, sigma), T in [lower, upper]  (interval-censored, burned cells only)
+def fit_anchor(df: pd.DataFrame, sigma: float | None = None, truncate: bool | None = None,
+               terms=("path_steps",)) -> dict:
+    """Maximum-likelihood straight lines in the logs of the anchor `terms`, on reachable cells:
+      cure: logit P(ever burns) = c0 + sum c_k ln(term_k)                      (weighted logistic likelihood)
+      time: ln T ~ Normal(t0 + sum t_k ln(term_k), sigma), T in [lower, upper]  (interval-censored, burned cells)
     sigma is estimated with the line when not given (the probability scale is set by the calibration afterwards).
     `truncate` (default TRUNCATE): right-truncated likelihood P(T in [lower, upper] | T < t_end - start), since a
     cell only counts as burned if it burned before its fire stopped growing. In principle that removes a survivor
     bias (the training fires all stopped within 2-5 days); train() keeps it only if it times held-out fires better.
-    Returns {"cure": [c0, c1], "time": [t0, t1], "sigma": sigma}."""
+    Returns {"terms": [...], "cure": [c0, ...], "time": [t0, ...], "sigma": sigma}."""
     from scipy.optimize import minimize
     from scipy.special import expit, log_ndtr
+    terms = list(terms)
+    k = len(terms)
     d = df[_reachable(df)]
-    x = _log_steps(_X(d))
+    x = _log_terms(_X(d), terms)
     w = d["weight"].to_numpy(np.float64)
     y = np.isfinite(d["upper_h"].to_numpy())
+    opts = {"xatol": 1e-5, "fatol": 1e-9, "maxiter": 6000, "maxfev": 12000}
 
     def nll_cure(c):
-        z = c[0] + c[1] * x
+        z = c[0] + x @ c[1:]
         return -np.sum(w * (y * np.log(expit(z) + 1e-12) + (~y) * np.log(expit(-z) + 1e-12))) / w.sum()
-    cure = minimize(nll_cure, np.array([0.0, -0.5]), method="Nelder-Mead", options={"xatol": 1e-5, "fatol": 1e-9}).x
+    cure = minimize(nll_cure, np.array([0.0, *([-0.5 / k] * k)]), method="Nelder-Mead", options=opts).x
 
     xb, wb = x[y], w[y]
     llo, lhi = np.log(d["lower_h"].to_numpy()[y]), np.log(d["upper_h"].to_numpy()[y])
@@ -654,27 +673,27 @@ def fit_anchor(df: pd.DataFrame, sigma: float | None = None, truncate: bool | No
     ltr = np.where(np.isfinite(ltr), np.maximum(ltr, lhi), np.inf)        # never below a cell's own upper bound
 
     def nll_time(c):
-        mu, sg = c[0] + c[1] * xb, (sigma if sigma is not None else math.exp(c[2]))
+        mu, sg = c[0] + xb @ c[1:k + 1], (sigma if sigma is not None else math.exp(c[k + 1]))
         lu, ll = log_ndtr((lhi - mu) / sg), log_ndtr((llo - mu) / sg)
         logp = lu + np.log1p(-np.exp(np.minimum(ll - lu, -1e-12)))       # ln(Phi(z_U) - Phi(z_L)), stable
         logp -= np.where(np.isfinite(ltr), log_ndtr((ltr - mu) / sg), 0.0)      # / P(T < end of growth)
         return -np.sum(wb * logp) / wb.sum()
-    start = np.array([0.0, 1.0] if sigma is not None else [0.0, 1.0, 0.0])
-    c = minimize(nll_time, start, method="Nelder-Mead", options={"xatol": 1e-5, "fatol": 1e-9, "maxiter": 4000}).x
-    return {"cure": [float(v) for v in cure], "time": [float(c[0]), float(c[1])],
-            "sigma": float(sigma if sigma is not None else math.exp(c[2]))}
+    start = np.array([0.0, *([1.0 / k] * k)] + ([] if sigma is not None else [0.0]))
+    c = minimize(nll_time, start, method="Nelder-Mead", options=opts).x
+    return {"terms": terms, "cure": [float(v) for v in cure], "time": [float(v) for v in c[:k + 1]],
+            "sigma": float(sigma if sigma is not None else math.exp(c[k + 1]))}
 
 
 def fit(df: pd.DataFrame, sigma: float | None = None, rounds: int = ROUNDS, cure_part: tuple | None = None,
-        truncate: bool | None = None) -> ArrivalModel:
+        truncate: bool | None = None, terms=("path_steps",)) -> ArrivalModel:
     """Anchor lines + `rounds` of trees on top of them (0 = physics curve only), on reachable cells. sigma: None =
-    maximum likelihood with the anchor line. `cure_part`: (anchor, booster) of a fitted "ever burns" part to reuse."""
+    maximum likelihood with the anchor line. `cure_part`: (cure coefficients, booster) of a fitted "ever burns"
+    part to reuse (same terms)."""
     import xgboost as xgb
     d = df[_reachable(df)]
     X = _X(d)
-    x = _log_steps(X)
     burned = np.isfinite(d["upper_h"].to_numpy())
-    anchor = fit_anchor(d, sigma, truncate)
+    anchor = fit_anchor(d, sigma, truncate, terms)
     sigma = anchor.pop("sigma")
     if cure_part is not None:
         anchor["cure"], cure = cure_part
@@ -682,13 +701,13 @@ def fit(df: pd.DataFrame, sigma: float | None = None, rounds: int = ROUNDS, cure
         cure = None
         if rounds:
             dc = xgb.DMatrix(X, label=burned.astype(np.float32), weight=d["weight"].to_numpy(np.float32),
-                             feature_names=list(FEATURES), base_margin=anchor["cure"][0] + anchor["cure"][1] * x)
+                             feature_names=list(FEATURES), base_margin=_line(anchor["cure"], X, anchor["terms"]))
             cure = xgb.train(CURE_PARAMS, dc, num_boost_round=rounds)
     time = None
     if rounds:
         b = d[burned]
         dt = xgb.DMatrix(X[burned], feature_names=list(FEATURES),
-                         base_margin=anchor["time"][0] + anchor["time"][1] * x[burned])
+                         base_margin=_line(anchor["time"], X[burned], anchor["terms"]))
         dt.set_float_info("label_lower_bound", b["lower_h"].to_numpy(np.float32))
         dt.set_float_info("label_upper_bound", b["upper_h"].to_numpy(np.float32))
         dt.set_weight(b["weight"].to_numpy(np.float32))
@@ -727,8 +746,10 @@ def evaluate(model: ArrivalModel, df: pd.DataFrame) -> dict:
                           probability), dist (-straight-line distance to the fire)
       brier_<h>h          weighted mean squared error of P(T <= h) (brier_raw_<h>h: before calibration)
       auc_ever            the classifier: burned at all vs never
-      interval_hit        burned cells with an interval at most 13 h wide whose median-if-burns falls in it
+      interval_hit        burned cells with an interval at most 13 h wide whose median arrival falls in it: the
+                          median the website shows (arrival_quantiles of the calibrated chances)
       median_abs_log_err  |ln median - ln mid-interval| for those cells (0.69 = a factor of 2)
+      ..._raw             the same for the uncalibrated median of the time part (median_if_burns)
       calibration_24h     [predicted bin, mean predicted, observed share, weight] for P(T <= 24 h)
     """
     probs, raw, med = _predict_samples(model, df)
@@ -762,9 +783,11 @@ def evaluate(model: ArrivalModel, df: pd.DataFrame) -> dict:
     out["auc_ever"] = per_start(pe, ever, np.ones_like(ever))
     tight = ever & (hi - lo <= 13)
     if tight.any():
-        m = med[tight]
-        out["interval_hit"] = round(float(((m >= lo[tight]) & (m <= hi[tight])).mean()), 4)
-        out["median_abs_log_err"] = round(float(np.median(np.abs(np.log(m) - np.log((lo[tight] + hi[tight]) / 2)))), 4)
+        mid = np.log((lo[tight] + hi[tight]) / 2)
+        shown = arrival_quantiles({k: v[tight] for k, v in probs.items()}, qs=(0.5,), sigma=model.sigma)[0.5]
+        for suffix, m in (("", shown), ("_raw", med[tight])):
+            out[f"interval_hit{suffix}"] = round(float(((m >= lo[tight]) & (m <= hi[tight])).mean()), 4)
+            out[f"median_abs_log_err{suffix}"] = round(float(np.median(np.abs(np.log(m) - mid))), 4)
         out["n_tight"] = int(tight.sum())
     pos, neg = _labels(lo, hi, 24)
     known = pos | neg
@@ -838,9 +861,10 @@ def _mean_auc(scores: dict) -> float:
 
 def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     """Leave-one-fire-out over the training fires (Crosswhite plays no part in any choice):
-      1. for each time likelihood (plain / right-truncated) and tree rounds on top of the anchor lines (ROUNDS_GRID,
-         0 = physics curve only): held-out AUC and timing error. Rounds: best AUC (ranking is the map's job); then
-         the likelihood whose models time held-out fires best (median |ln error| of burned cells);
+      1. the anchor terms (ANCHOR_CHOICES): best held-out AUC with the plain likelihood and no trees;
+         then for each time likelihood (plain / right-truncated) and tree rounds on top of the anchor lines
+         (ROUNDS_GRID, 0 = physics curve only): held-out AUC and timing error. Rounds: best AUC (ranking is the map's
+         job); then the likelihood whose models time held-out fires best (median |ln error| of the median shown);
       2. sigma is estimated by maximum likelihood with the anchor line (the calibration sets the probability scale,
          so it need not be tuned on the Brier score);
       3. calibration from out-of-fold predictions, and the held-out scores;
@@ -849,11 +873,19 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     data = {s: d for s, d in data.items() if len(d)}
     train_fires = [s for s in fires if s in data]
     folds = {held: pd.concat([data[s] for s in train_fires if s != held]) for held in train_fires}
-    report: dict = {"lofo": {}, "selection": {}}
+    report: dict = {"lofo": {}, "anchor_selection": {}, "selection": {}}
+    for choice in ANCHOR_CHOICES:
+        scores = [evaluate(fit(folds[held], None, 0, truncate=False, terms=choice), data[held]) for held in train_fires]
+        report["anchor_selection"]["+".join(choice)] = {
+            "auc": round(float(np.mean([_mean_auc(s) for s in scores])), 4),
+            "log_err": round(float(np.mean([s.get("median_abs_log_err", np.inf) for s in scores])), 4)}
+    terms = max(ANCHOR_CHOICES, key=lambda c: report["anchor_selection"]["+".join(c)]["auc"])
+    report["terms"] = list(terms)
     best: dict = {}
     for truncate in (False, True):
         for rounds in ROUNDS_GRID:
-            scores = [evaluate(fit(folds[held], None, rounds, truncate=truncate), data[held]) for held in train_fires]
+            scores = [evaluate(fit(folds[held], None, rounds, truncate=truncate, terms=terms), data[held])
+                      for held in train_fires]
             auc = float(np.mean([_mean_auc(s) for s in scores]))
             err = float(np.mean([s.get("median_abs_log_err", np.inf) for s in scores]))
             report["selection"][f"truncate={truncate} rounds={rounds}"] = {"auc": round(auc, 4), "log_err": round(err, 4)}
@@ -864,12 +896,12 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
     report.update({"truncate": truncate, "rounds": rounds})
     # Calibration from out-of-fold predictions: the maps used to score fire F are learned from the other training
     # fires' held-out predictions only, so F never informs its own calibration.
-    fold_models = {held: fit(folds[held], None, rounds, truncate=truncate) for held in train_fires}
+    fold_models = {held: fit(folds[held], None, rounds, truncate=truncate, terms=terms) for held in train_fires}
     for held in train_fires:
         m = fold_models[held]
         m.calibration = fit_calibration([(fold_models[o], data[o]) for o in train_fires if o != held])
         report["lofo"][held] = evaluate(m, data[held])
-    model = fit(pd.concat([data[s] for s in train_fires]), None, rounds, truncate=truncate)
+    model = fit(pd.concat([data[s] for s in train_fires]), None, rounds, truncate=truncate, terms=terms)
     model.calibration = fit_calibration([(fold_models[o], data[o]) for o in train_fires])
     report["validation"] = {s: evaluate(model, data[s]) for s in valid if s in data}
     report["anchor"], report["sigma"] = model.anchor, model.sigma
@@ -890,6 +922,8 @@ def train(fires=TRAIN_FIRES, valid=VALID_FIRES, save: bool = True) -> dict:
 def _print_report(report: dict) -> None:
     print(f"\nchosen: truncated likelihood {report['truncate']}, tree rounds {report['rounds']}, "
           f"sigma {report['sigma']:.3f} (maximum likelihood), anchor {report['anchor']}")
+    print("anchor terms, held-out mean AUC / timing |ln error|: " + "; ".join(
+        f"{k}: {v['auc']} / {v['log_err']}" for k, v in report["anchor_selection"].items()))
     print("held-out mean AUC / timing |ln error| by choice: " + "; ".join(
         f"{k}: {v['auc']} / {v['log_err']}" for k, v in report["selection"].items()))
     rows = {**{f"{k} (held out)": v for k, v in report["lofo"].items()},
@@ -902,8 +936,9 @@ def _print_report(report: dict) -> None:
                   f"distance {m[f'auc_dist_{h}h']})  Brier {m[f'brier_{h}h']} (raw {m[f'brier_raw_{h}h']})  "
                   f"[{m[f'n_pos_{h}h']} of {m[f'n_known_{h}h']} cells burned]")
         if "interval_hit" in m:
-            print(f"  median-if-burns inside the observed interval: {100 * m['interval_hit']:.0f}%, median |ln error| "
-                  f"{m['median_abs_log_err']} ({m['n_tight']} cells)")
+            print(f"  median arrival (as shown) inside the observed interval: {100 * m['interval_hit']:.0f}%, median "
+                  f"|ln error| {m['median_abs_log_err']} (uncalibrated {m['median_abs_log_err_raw']}; "
+                  f"{m['n_tight']} cells)")
         print("  calibration 24 h [bin, predicted, observed, weight]: " + "  ".join(map(str, m["calibration_24h"])))
     if report["feature_gain"]:
         print("\nfeature gain:", report["feature_gain"])
