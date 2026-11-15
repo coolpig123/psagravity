@@ -240,3 +240,113 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 }
 
 .wind-error { color: #8a5a00; }
+
+/* Place search and "my location" button, floating at the top-left of the map (LocationSearch.tsx). */
+.location-search {
+  position: absolute;
+  z-index: 3; /* above the wind canvas and the credit */
+  top: 10px;
+  left: 10px;
+  width: min(420px, calc(100% - 20px));
+  font: 14px 'Inter', system-ui, sans-serif;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.search-row .search-icon {
+  width: 16px;
+  height: 16px;
+  color: #888;
+  flex: none;
+}
+
+.search-row input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  padding: 6px 8px;
+  font: inherit;
+  background: transparent;
+}
+
+.search-row input::-webkit-search-cancel-button { display: none; } /* we have our own clear button */
+
+.icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #444;
+  cursor: pointer;
+}
+
+.icon-button svg { width: 18px; height: 18px; }
+.icon-button:not(:disabled):hover { background: #f0f0f0; color: #d62828; }
+.icon-button:disabled { opacity: 0.4; cursor: default; }
+
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.search-results {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 0;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.search-results-title {
+  padding: 2px 12px 4px;
+  font-size: 12px;
+  color: #888;
+}
+
+.search-results button {
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  font: 13px 'Inter', system-ui, sans-serif;
+  color: #222;
+  cursor: pointer;
+}
+
+.search-results button:hover { background: #f6f6f6; }
+
+.search-message {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #fff8e6;
+  color: #8a5a00;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* The user's position: blue dot with a white ring. */
+.my-location-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1a73e8;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 6px rgba(26, 115, 232, 0.25), 0 1px 3px rgba(0, 0, 0, 0.4);
+}

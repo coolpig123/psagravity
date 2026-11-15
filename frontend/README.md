@@ -33,6 +33,14 @@ npm run dev                                             # then open http://local
 
 Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\server.py` runs the server alone (port 8000).
 
+## Finding a place
+
+When the website opens it asks the browser for your location; if you allow it, the map flies there (blue dot).
+Either way, the search bar at the top-left of the map finds any place (type it, press Enter): the map flies there,
+framing the place a little zoomed out, and lists the other matches below the bar. The target button next to it goes
+back to your location. Places come from [OpenStreetMap Nominatim](https://nominatim.org/) (free, no key; one
+search per Enter, as its usage policy asks), so this also works on the GitHub Pages version.
+
 ## Wind
 
 The wind is on from the moment the website opens, with or without a polygon: the whole map is covered with the wind
