@@ -115,6 +115,16 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 .panel p { margin: 0 0 4px; }
 .panel .error { color: #d62828; }
 .panel .note { color: #8a5a00; }
+/* Extract Data on the static site: the table of model inputs. */
+.panel .extracted {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font: 12px ui-monospace, Consolas, monospace;
+  background: #f6f6f6;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+}
 
 .ramp {
   display: inline-block;

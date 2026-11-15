@@ -257,8 +257,10 @@ Progress is tracked in the GitHub project **psagravity tasks**.
 
 The `master` branch is published on GitHub Pages ([.github/workflows/pages.yml](.github/workflows/pages.yml)):
 
-- **Website:** https://coolpig123.github.io/psagravity/ (map, drawing, regions; Predict and the wind need the Python
-  server, so they only work when the app runs locally)
+- **Website:** https://coolpig123.github.io/psagravity/ : everything works (Predict, arrival times, wind, Extract
+  Data) with no server and no login, **around Haifa** and from 2026-06-01: the data was downloaded in advance and
+  the spread model runs in the browser. See [israel_static/README.md](israel_static/README.md). Anywhere else in
+  the world: run the app locally ([frontend/README.md](frontend/README.md)).
 - **Fire explorer (all study fires, timeline):** https://coolpig123.github.io/psagravity/fire-explorer/
 
 ## Repository structure
@@ -272,6 +274,7 @@ psagravity/
 ├── spread_model/          # Alexandridis CA: spread probability per cell + most likely direction (see its README)
 ├── frontend/              # website: draw the fire, Predict, heatmap (see its README to run the app)
 ├── backend/               # Python API server (POST /api/predict) used by the website
+├── israel_static/         # the website without a server: Haifa data downloaded in advance, model in the browser
 └── real_fires/            # ground truth from real fires, NISAR reader
     ├── src/firedata/      # pipeline code (package)
     ├── scripts/           # build_ground_truth.py, test_app.py

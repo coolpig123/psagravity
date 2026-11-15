@@ -2,6 +2,7 @@
 real_fires/data/**/raw/
 gee_layers/data/
 spread_model/data/
+israel_static/data/
 .venv/
 __pycache__/
 *.pyc

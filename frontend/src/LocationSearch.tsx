@@ -35,7 +35,14 @@ function locationDot(): HTMLElement {
   return el
 }
 
-export default function LocationSearch({ map }: { map: maplibregl.Map | null }) {
+// locateOnLoad = false: the page opens on its own area (the static site); the target button still works.
+export default function LocationSearch({
+  map,
+  locateOnLoad = true,
+}: {
+  map: maplibregl.Map | null
+  locateOnLoad?: boolean
+}) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Place[]>([])
   const [status, setStatus] = useState<Status>({ state: 'idle' })
@@ -79,7 +86,7 @@ export default function LocationSearch({ map }: { map: maplibregl.Map | null }) 
 
   // On page load: try the user's location once the map is ready.
   useEffect(() => {
-    locate(true)
+    if (locateOnLoad) locate(true)
     return () => {
       marker.current?.remove()
       marker.current = null

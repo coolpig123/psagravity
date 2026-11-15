@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 import LocationSearch from './LocationSearch'
 import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, strideFor, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
+import { DATA_URL, onStaticStatus, periodText, STATIC, staticFetch, staticIndex, warmUp, type StaticIndex } from './staticSite'
+
+// In a build, MapLibre looks for its worker file next to the bundle, where it is not (404: the map tiles show,
+// but no polygon, prediction or regions). Vite bundles the worker and gives its real address.
+if (import.meta.env.PROD) maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
@@ -30,11 +36,14 @@ const DEFAULT_START = '2026-08-09T21:00Z' // Bug Fire, first afternoon: easy to 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 // Where the Python server is: same origin by default (Vite proxy in npm run dev). The GitHub Pages build has no
-// server (VITE_NO_SERVER=1), unless VITE_API_BASE points to one that is reachable from the browser.
+// server: it is built with VITE_STATIC_DATA=haifa and answers the same calls in the browser, from data downloaded
+// in advance for that area (staticSite.ts). VITE_NO_SERVER=1 builds a site with neither, unless VITE_API_BASE
+// points to a server that is reachable from the browser.
 const API_BASE: string = import.meta.env.VITE_API_BASE ?? ''
-const NO_SERVER = import.meta.env.VITE_NO_SERVER === '1' && !API_BASE
+const NO_SERVER = !STATIC && import.meta.env.VITE_NO_SERVER === '1' && !API_BASE
 const NO_SERVER_MESSAGE = 'This online version has no Python server: run the app locally to use it (see frontend/README.md)'
-const api = (path: string, init: RequestInit) => {
+const api = async (path: string, init: RequestInit): Promise<Response> => {
+  if (STATIC) return staticFetch(path, init)
   if (NO_SERVER) throw new Error(NO_SERVER_MESSAGE)
   return fetch(API_BASE + path, init)
 }
@@ -239,6 +248,39 @@ function App() {
   const windAsked = useRef<{ start: string; box: [number, number, number, number]; stride: number } | null>(null)
   const windTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [viewTick, setViewTick] = useState(0) // +1 after each pan / zoom, so the wind can follow the view
+  // Static site only: what was downloaded (index.json), what the Python worker is doing, the Extract Data table.
+  const [site, setSite] = useState<StaticIndex | null>(null)
+  const [pythonStatus, setPythonStatus] = useState('')
+  const [extracted, setExtracted] = useState('')
+  const [extracting, setExtracting] = useState(false)
+  const startEdited = useRef(false) // the user typed a start time: the site's default must not replace it
+
+  // Static site: read what was downloaded and start loading Python in the background.
+  useEffect(() => {
+    if (!STATIC) return
+    const stop = onStaticStatus(setPythonStatus)
+    warmUp()
+    staticIndex()
+      .then((index) => {
+        setSite(index)
+        if (index.default_start_utc && !startEdited.current) setStart(index.default_start_utc)
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    return stop
+  }, [])
+
+  // Static site: open the map on the downloaded area and outline it.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!site || !loaded || !map) return
+    const [w, s, e, n] = site.bbox
+    map.fitBounds([[w, s], [e, n]], { padding: 20, duration: 0 })
+    map.getSource<maplibregl.GeoJSONSource>('static-area')?.setData({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: [[w, s], [e, s], [e, n], [w, n], [w, s]] },
+    })
+  }, [site, loaded])
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -262,7 +304,11 @@ function App() {
 
     map.on('load', () => {
       // Where get_fire_inputs has full data (green) or not (red); built by backend/make_regions.py.
-      map.addSource('regions', { type: 'geojson', data: `${import.meta.env.BASE_URL}regions.geojson` })
+      // Static site: the area whose data was downloaded (green) and the rest of the world (red) instead.
+      map.addSource('regions', {
+        type: 'geojson',
+        data: STATIC ? `${DATA_URL}regions.geojson` : `${import.meta.env.BASE_URL}regions.geojson`,
+      })
       map.addLayer({
         id: 'regions-fill',
         type: 'fill',
@@ -272,6 +318,14 @@ function App() {
           'fill-color': ['case', ['get', 'available'], '#00ff00', '#ff0000'],
           'fill-opacity': 0.3,
         },
+      })
+      // Static site: dashed outline of the downloaded area, always shown (set once index.json is read).
+      map.addSource('static-area', { type: 'geojson', data: EMPTY })
+      map.addLayer({
+        id: 'static-area-line',
+        type: 'line',
+        source: 'static-area',
+        paint: { 'line-color': '#1b7f3b', 'line-width': 2, 'line-dasharray': [4, 3] },
       })
       map.addSource('polygon', { type: 'geojson', data: toGeoJSON([], 'idle') })
       map.addLayer({
@@ -532,6 +586,7 @@ function App() {
     setPrediction(null)
     setPredicting(false)
     setError('')
+    setExtracted('')
   }
 
   const draw = () => {
@@ -569,21 +624,26 @@ function App() {
   // One-line hint for the next step, shown under the toolbar.
   const hint =
     mode === 'idle'
-      ? 'Click Draw to start a polygon.'
+      ? site
+        ? `Click Draw and outline a fire inside the dashed green box. This site runs in your browser on data downloaded for ${site.name} (weather ${periodText(site)}): no server, no login.`
+        : 'Click Draw to start a polygon.'
       : mode === 'locked'
         ? 'Set the start time (UTC) and press Predict to see where the fire is likely to spread, or Clear to start over.'
         : points.length < 3
           ? 'Click the map to add points (at least 3). Drag a point to move it.'
           : 'Click to add more points, drag a point to move it, or press Finish to lock the polygon.'
 
-  // Send the finished polygon to the Python server, which prints its points.
+  // Send the finished polygon to the Python server, which prints its points and the model inputs around it.
+  // The static site has no terminal to print in: it shows that table under the map (inputs at the Start time).
   const extract = async () => {
     const feature: GeoJSON.Feature = {
       type: 'Feature',
-      properties: { area_km2: area },
+      properties: STATIC ? { area_km2: area, start: start.trim(), weather_source: weatherSource } : { area_km2: area },
       geometry: { type: 'Polygon', coordinates: [[...points, points[0]]] },
     }
     if (NO_SERVER) return // nothing to send it to
+    setExtracted('')
+    setExtracting(true)
     try {
       const res = await api('/api/polygon', {
         method: 'POST',
@@ -591,10 +651,16 @@ function App() {
         body: JSON.stringify(feature),
       })
       if (res.status === 503) throw new Error('The Python server is not running. Start everything with: npm run dev')
-      if (!res.ok) throw new Error(`The server answered ${res.status}: ${await res.text()}`)
+      if (STATIC) {
+        const data = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(data?.error ?? `The model answered ${res.status}`)
+        setExtracted(data?.text ?? '')
+      } else if (!res.ok) throw new Error(`The server answered ${res.status}: ${await res.text()}`)
     } catch (err) {
       alert(`Could not send the polygon.
 ${err instanceof Error ? err.message : err}`)
+    } finally {
+      setExtracting(false)
     }
   }
 
@@ -603,6 +669,7 @@ ${err instanceof Error ? err.message : err}`)
     const id = ++requestId.current
     setPrediction(null)
     setError('')
+    setExtracted('')
     setPredicting(true)
     try {
       const res = await api('/api/predict', {
@@ -639,15 +706,26 @@ ${err instanceof Error ? err.message : err}`)
         <button onClick={finish} disabled={mode !== 'drawing' || points.length < 3}><Check />Finish</button>
         <button onClick={undo} disabled={mode !== 'drawing' || history.length === 0}><Undo2 />Undo</button>
         <button onClick={clear} disabled={points.length === 0 && mode === 'idle'}><Trash2 />Clear</button>
-        <button onClick={extract} disabled={mode !== 'locked'}><Download />Extract Data</button>
+        <button onClick={extract} disabled={mode !== 'locked' || extracting || (STATIC && !start.trim())}>
+          <Download />
+          {extracting ? 'Extracting…' : 'Extract Data'}
+        </button>
         <label className="start">
           Start (UTC)
-          <input value={start} onChange={(e) => setStart(e.target.value)} placeholder={DEFAULT_START} size={18} />
+          <input
+            value={start}
+            onChange={(e) => {
+              startEdited.current = true
+              setStart(e.target.value)
+            }}
+            placeholder={DEFAULT_START}
+            size={18}
+          />
         </label>
         <label className="start">
           Weather
           <select value={weatherSource} onChange={(e) => setWeatherSource(e.target.value as typeof weatherSource)}>
-            <option value="auto">Auto (Meteomatics / RTMA / GFS)</option>
+            <option value="auto">{STATIC ? 'Auto (ERA5-Land / GFS)' : 'Auto (Meteomatics / RTMA / GFS)'}</option>
             <option value="meteomatics">Meteomatics (1 km Forecast)</option>
             <option value="rtma">NOAA RTMA (US analysis)</option>
             <option value="gfs">NOAA GFS (0.25° forecast)</option>
@@ -683,7 +761,7 @@ ${err instanceof Error ? err.message : err}`)
       <div className="hint">{hint}</div>
       <div className="map-wrap">
         <div ref={container} className="map" />
-        <LocationSearch map={loaded ? mapRef.current : null} />
+        <LocationSearch map={loaded ? mapRef.current : null} locateOnLoad={!STATIC} />
         <a className="credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
           © OpenStreetMap contributors
         </a>
@@ -691,7 +769,9 @@ ${err instanceof Error ? err.message : err}`)
       <div className="options">
         <label className="regions">
           <input type="checkbox" checked={showRegions} onChange={(e) => setShowRegions(e.target.checked)} />
-          regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data
+          {STATIC
+            ? `area with downloaded data (${site?.name ?? '…'}): Predict works inside the green box only`
+            : 'regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data'}
         </label>
         <label className="regions wind">
           <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
@@ -714,7 +794,10 @@ ${err instanceof Error ? err.message : err}`)
         </label>
       </div>
       <div className="panel">
-        {predicting && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}
+        {predicting && !STATIC && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}
+        {STATIC && (predicting || extracting) && <p>{pythonStatus || 'Running the model in your browser…'}</p>}
+        {STATIC && !predicting && !extracting && pythonStatus && <p className="note">{pythonStatus}</p>}
+        {extracted && <pre className="extracted">{extracted}</pre>}
         {error && <p className="error">Prediction failed: {error}</p>}
         {s && (
           <>

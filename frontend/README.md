@@ -33,6 +33,19 @@ npm run dev                                             # then open http://local
 
 Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\server.py` runs the server alone (port 8000).
 
+## The online version (no server)
+
+https://coolpig123.github.io/psagravity/ is this website built with `VITE_STATIC_DATA=haifa`: no Python server,
+no Earth Engine, no login. The data around Haifa (from 2026-06-01) was downloaded in advance into
+`public/haifa/`, and Predict, the arrival times, the wind and Extract Data run in the browser on it (the same
+Python model, with Pyodide). Details, limits and how to refresh the data:
+[israel_static/README.md](../israel_static/README.md). To try it locally without the Python server:
+
+```powershell
+cd frontend
+$env:VITE_STATIC_DATA = "haifa"; npm run dev:web
+```
+
 ## Finding a place
 
 When the website opens it asks the browser for your location; if you allow it, the map flies there (blue dot).

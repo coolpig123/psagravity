@@ -1,5 +1,7 @@
 # Publish master on GitHub Pages: https://coolpig123.github.io/psagravity/
-#   /                -> frontend/ (the map website; Predict and wind need the Python server, so they only work locally)
+#   /                -> frontend/ (the map website). There is no Python server here: the site is built with
+#                       VITE_STATIC_DATA=haifa and runs the spread model in the browser on the data downloaded
+#                       in advance into frontend/public/haifa/ (see israel_static/README.md). No secrets needed.
 #   /fire-explorer/  -> real_fires/app/ (the study fires timeline, fully static)
 # One-time setup: repo Settings -> Pages -> Source: "GitHub Actions".
 name: GitHub Pages
@@ -32,7 +34,7 @@ jobs:
         working-directory: frontend
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_NO_SERVER: '1'
+          VITE_STATIC_DATA: haifa
         run: |
           npm ci
           npm run build
