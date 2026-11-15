@@ -1,0 +1,3 @@
+fire,ignition_utc,horizon_h,target_utc,hours,obs_new_km2,pred_new_km2,iou,precision,recall,circle_iou,circle_precision,circle_recall,expected_new_km2,feds_km2_in_grid,weather,reached_grid_edge,active_detections,notes
+crosswhite,2026-07-16 00:51,6,2026-07-16 09:30,8.6000,1.1100,0.0000,0.0000,,0.0000,0.0000,,0.0000,0.4977,1.1100,rtma,0,0,no VIIRS detection on the polygon in the 12 h before the start: the whole polygon is taken as the active front
+crosswhite,2026-07-16 00:51,24,2026-07-16 20:30,19.6000,18.6300,0.0100,0.0005,1.0000,0.0005,0.0043,1.0000,0.0043,4.7529,18.6700,rtma,0,0,no VIIRS detection on the polygon in the 12 h before the start: the whole polygon is taken as the active front
