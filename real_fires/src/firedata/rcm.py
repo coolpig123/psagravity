@@ -7,7 +7,9 @@ Cloud-Optimised GeoTIFFs at 20 m pixels. Layout:
 Licence: RCM public EULA (PDF in every scene folder); free to use.
 
 Only a window around the fire is read over HTTP (GDAL /vsicurl/), never a full scene.
-RL is the cross-polarised channel (volume scattering from canopy); burning removes canopy, so RL drops.
+RL is the cross-polarised channel (volume scattering from canopy). On Bald Range RL *rises* inside the burn
+(canopy loss exposes the ground; boreal C-band studies report a rise too), so the burned-area rule is an RL
+increase, the opposite of NISAR's L-band HV drop. See data/fires/bald_range/README.md.
 """
 from __future__ import annotations
 
