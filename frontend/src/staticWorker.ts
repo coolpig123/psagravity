@@ -36,7 +36,7 @@ function mkdirFor(py: Pyodide, path: string) {
 
 async function fetchInto(py: Pyodide, name: string): Promise<void> {
   if (haveFiles.has(name)) return
-  const res = await fetch(dataUrl + name)
+  const res = await fetch(dataUrl + name, name === 'index.json' ? { cache: 'no-cache' } : undefined)
   if (!res.ok) throw new Error(`data file ${name}: ${res.status}`)
   const path = `${DATA_DIR}/${name}`
   mkdirFor(py, path)
@@ -51,7 +51,7 @@ async function start(bundleUrl: string): Promise<Pyodide> {
   }
   const py = await loadPyodide({ indexURL: PYODIDE_URL })
   const [bundle] = await Promise.all([
-    fetch(bundleUrl).then((r) => {
+    fetch(bundleUrl, { cache: 'no-cache' }).then((r) => { // always the Python of this deploy, not a cached one
       if (!r.ok) throw new Error(`py-bundle.json: ${r.status}`)
       return r.json() as Promise<Record<string, string>>
     }),
