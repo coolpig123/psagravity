@@ -145,13 +145,28 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 .area.too-big { color: #c01f1f; background: #fde4e4; }
 
 /* Row of map options under the map: regions, then wind (after Finish). */
+/* Always one line: a long wind message is cut ("…", full text on hover) instead of wrapping, because a taller row
+   would shrink the map, and every map resize asks for the wind again. */
 .options {
   width: var(--content-width);
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   column-gap: 24px;
-  row-gap: 4px;
+  white-space: nowrap;
+}
+
+.options .regions { flex: none; }
+
+.options .regions.wind {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.options .regions.wind > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .regions {
