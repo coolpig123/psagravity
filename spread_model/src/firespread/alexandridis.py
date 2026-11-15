@@ -96,6 +96,10 @@ class AlexandridisParams:
     spot_wind_dist_m_per_ms: float = 120.0  # added mean jump distance per m/s above spot_min_wind_ms
     spot_max_m: float = 3000.0              # maximum jump distance (m)
     spot_cone_deg: float = 15.0             # angular spread (std dev, degrees) around the downwind bearing
+    # Hotter cells loft more firebrands: where VIIRS FRP is known (frp_mw, active front only), the launch probability
+    # is multiplied by 1 + spot_frp_boost * FRP / (FRP + spot_frp_ref_mw) (at most 1 + spot_frp_boost). Not calibrated.
+    spot_frp_boost: float = 0.5
+    spot_frp_ref_mw: float = 50.0
 
     @classmethod
     def calibrated(cls) -> AlexandridisParams:
@@ -281,9 +285,11 @@ def p_slope(theta_s_deg: np.ndarray, params: AlexandridisParams) -> np.ndarray:
 
 def p_spot(u: np.ndarray, v: np.ndarray, veg: np.ndarray, den: np.ndarray,
            target_factor: np.ndarray, params: AlexandridisParams,
-           gust: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+           gust: np.ndarray | None = None,
+           frp: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Spotting (firebrand) fields per cell:
-      p_spot_launch (y, x): probability a burning cell launches a firebrand in one CA step
+      p_spot_launch (y, x): probability a burning cell launches a firebrand in one CA step (raised on high-FRP
+                            cells when `frp` (MW, VIIRS) is given)
       p_spot_ignite (y, x): probability a landed firebrand ignites the cell (0 on water/scars/unburnable)
       spot_dist_m   (y, x): mean downwind jump distance (m) for firebrands launched from the cell
       spot_dir_deg  (y, x): downwind compass bearing (degrees clockwise from N)
@@ -298,8 +304,11 @@ def p_spot(u: np.ndarray, v: np.ndarray, veg: np.ndarray, den: np.ndarray,
     above = np.maximum(speed - params.spot_min_wind_ms, 0.0)
     wind_factor = np.where(speed > params.spot_min_wind_ms,
                            1.0 - np.exp(-above / max(params.spot_wind_scale_ms, 1e-6)), 0.0)
-    launch = np.clip(params.spot_prob * np.maximum(1.0 + veg, 0.0) * np.maximum(1.0 + den, 0.0) * wind_factor,
-                     0.0, 1.0).astype(np.float32)
+    launch = params.spot_prob * np.maximum(1.0 + veg, 0.0) * np.maximum(1.0 + den, 0.0) * wind_factor
+    if frp is not None and params.spot_frp_boost > 0:
+        f = np.maximum(np.nan_to_num(frp), 0.0)
+        launch = launch * (1.0 + params.spot_frp_boost * f / (f + max(params.spot_frp_ref_mw, 1e-6)))
+    launch = np.clip(launch, 0.0, 1.0).astype(np.float32)
     ignite = np.clip(target_factor, 0.0, 1.0).astype(np.float32)
     dist_m = np.clip(params.spot_min_m + params.spot_wind_dist_m_per_ms * above,
                      params.spot_min_m, params.spot_max_m).astype(np.float32)
@@ -342,12 +351,15 @@ def _compass(bearing: float) -> str:
 # ---- the model ------------------------------------------------------------------------------
 
 def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time=None,
-                         params: AlexandridisParams | None = None) -> xr.Dataset:
+                         params: AlexandridisParams | None = None, front: np.ndarray | None = None) -> xr.Dataset:
     """Spread probability from every burning cell to each of its 8 neighbours, for one CA step.
 
     ds:      inputs on one grid (geelayers.get_fire_inputs output, + optional NISAR variables).
-    burning: bool/int (y, x) mask of burning cells; default ds["initial_burned"].
+    burning: bool/int (y, x) mask of burned / burning cells; default ds["initial_burned"]. They cannot catch fire.
     time:    which weather step to use (last one at or before `time`); default the first.
+    front:   the cells that actually spread (the active front, e.g. from VIIRS); default ds["active_front"] if
+             present, else all of `burning`. Front cells outside `burning` count as burning too. An empty front
+             falls back to `burning`.
 
     Returns a Dataset with
       p_veg, p_den, p_m, p_mask (y, x)            factors of the cell that would catch fire
@@ -363,8 +375,19 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
             raise ValueError("no burning cells: pass burning=... or a Dataset with initial_burned")
         burning = ds["initial_burned"].values
     burning = np.asarray(burning).astype(bool)
+    if front is None and "active_front" in ds:
+        front = ds["active_front"].values
+    if front is not None:
+        front = np.asarray(front).astype(bool)
+        if front.shape != burning.shape:
+            raise ValueError(f"front has shape {front.shape}, the grid is {burning.shape}")
+        if not front.any():
+            front = None
+    if front is not None:
+        burning = burning | front
     if not burning.any():
         raise ValueError("no burning cells")
+    spreading = burning if front is None else front
     res = float(ds.attrs.get("res_m", abs(float(ds.x[1] - ds.x[0]))))
     shape = burning.shape
 
@@ -390,7 +413,9 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_m P_mask
     target_factor = params.p0 * (1 + veg) * (1 + den) * moist * mask
     gust = np.nan_to_num(snap["gust_ms"].values.astype(np.float32)) if "gust_ms" in snap else None
-    spot_launch, spot_ignite, spot_dist_m, spot_dir_deg = p_spot(u, v, veg, den, target_factor, params, gust=gust)
+    frp = np.nan_to_num(snap["frp_mw"].values.astype(np.float32)) if "frp_mw" in snap else None
+    spot_launch, spot_ignite, spot_dist_m, spot_dir_deg = p_spot(u, v, veg, den, target_factor, params, gust=gust,
+                                                                 frp=frp)
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)
@@ -409,7 +434,7 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     # probability each cell catches fire: 1 - prod over burning neighbours of (1 - P(i -> j))
     no_fire = np.ones(shape, np.float64)
-    from_burning = p * burning                       # only burning cells spread
+    from_burning = p * spreading                     # only the burning (active-front) cells spread
     for k, (_, dr, dc, _) in enumerate(DIRECTIONS):
         no_fire *= 1 - shift(from_burning[k], -dr, -dc, 0.0)
     ignition = (1 - no_fire).astype(np.float32)
@@ -423,8 +448,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
     main_bearing = float(np.degrees(np.arctan2(east, north)) % 360)
     strength = float(np.hypot(east, north) / total) if total > 0 else 0.0
     edge = burning[0].any() or burning[-1].any() or burning[:, 0].any() or burning[:, -1].any()
-    n_spreads = int(((raw > 0) & burning).sum())
-    n_clipped = int(((raw > 1) & burning).sum())
+    n_spreads = int(((raw > 0) & spreading).sum())
+    n_clipped = int(((raw > 1) & spreading).sum())
 
     dims2, dims3 = ("y", "x"), ("direction", "y", "x")
     coords = {k: ds.coords[k] for k in ("y", "x", "lat", "lon") if k in ds.coords}
@@ -435,8 +460,13 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
          "p_wind": (dims3, pw), "p_slope": (dims3, ps), "p_spread": (dims3, p),
          "p_spot_launch": (dims2, spot_launch), "p_spot_ignite": (dims2, spot_ignite),
          "spot_dist_m": (dims2, spot_dist_m), "spot_dir_deg": (dims2, spot_dir_deg),
-         "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16))},
+         "ignition_prob": (dims2, ignition), "burning": (dims2, burning.astype(np.int16)),
+         "active_front": (dims2, spreading.astype(np.int16))},
         coords={**coords, "direction": DIR_NAMES})
+    out["burning"].attrs["description"] = "burned / burning cells at the start (cannot catch fire again)"
+    out["active_front"].attrs["description"] = "the burning cells that spread (all of `burning` without a front)"
+    if frp is not None:
+        out["frp_mw"] = (dims2, frp, ds["frp_mw"].attrs)
     out["p_spread"].attrs["description"] = "P(burning cell at (y, x) ignites its neighbour in `direction`), clipped to 1"
     out["p_spot_launch"].attrs["description"] = "probability a burning cell launches a downwind firebrand in one CA step"
     out["p_spot_ignite"].attrs["description"] = "probability a landed firebrand ignites the cell"
@@ -455,6 +485,9 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
         "spot_min_m": float(params.spot_min_m),
         "spot_max_m": float(params.spot_max_m),
         "spot_cone_deg": float(params.spot_cone_deg),
+        "active_front_cells": int(spreading.sum()),
+        "active_front_source": "VIIRS active front" if front is not None else "whole burned area",
+        **({"active_front_note": ds.attrs["active_front_note"]} if "active_front_note" in ds.attrs else {}),
         "weather_time_utc": weather_time,
         "weather_note": time_note,
         "source_p_veg": veg_src, "source_p_den": den_src, "source_p_m": moist_src, "source_p_mask": mask_src,

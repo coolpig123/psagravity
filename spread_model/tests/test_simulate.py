@@ -81,3 +81,43 @@ def test_spotting_fields_and_moisture_dependence():
 def test_bad_arguments():
     with pytest.raises(ValueError):
         simulate_spread(spread_probabilities(make_ds()), steps=0)
+
+
+def _square(half=2):
+    sq = np.zeros((N, N), np.int16)
+    sq[C - half:C + half + 1, C - half:C + half + 1] = 1
+    return sq
+
+
+def test_front_only_on_east_edge_spreads_east_not_west():
+    sq = _square()
+    front = np.zeros((N, N), bool)
+    front[C - 2:C + 3, C + 2] = True                      # only the east edge of the square is burning
+    res = certain(spread_probabilities(make_ds(burning=sq)))
+    sim = simulate_spread(res, steps=2, runs=3, spotting=False, front=front)
+    bp = sim["burn_prob"].values
+    assert (bp[C - 2:C + 3, C + 3:C + 5] == 1).all()       # east: 2 columns in 2 steps
+    assert (bp[:, :C - 2] == 0).all()                      # nothing west of the cold west edge
+    assert (bp[sq.astype(bool)] == 0).all()                # the interior never re-burns
+    assert sim.attrs["sim_front_cells"] == 5
+    whole = simulate_spread(res, steps=2, runs=3, spotting=False)    # no front: every edge spreads
+    assert (whole["burn_prob"].values[C - 2:C + 3, C - 3] == 1).all()
+
+
+def test_front_from_dataset_and_empty_front_fallback():
+    sq = _square()
+    ds = make_ds(burning=sq)
+    front = np.zeros((N, N), np.int16)
+    front[C - 2:C + 3, C + 2] = 1
+    ds["active_front"] = (("y", "x"), front)
+    res = spread_probabilities(ds)                         # one-step summary uses the front too
+    ign = res["ignition_prob"].values
+    assert (ign[:, :C - 2] == 0).all() and (ign[C, C + 3] > 0)
+    assert res.attrs["main_direction"] == "E" and res.attrs["active_front_cells"] == 5
+    assert res.attrs["active_front_source"] == "VIIRS active front"
+    sim = simulate_spread(certain(res), steps=1, runs=2, spotting=False)       # picks result["active_front"]
+    assert (sim["burn_prob"].values[:, :C - 2] == 0).all()
+    empty = simulate_spread(certain(res), steps=1, runs=2, spotting=False, front=np.zeros((N, N), bool))
+    assert (empty["burn_prob"].values[C, C - 3] == 1)      # empty front -> the whole burned area spreads
+    with pytest.raises(ValueError):
+        simulate_spread(res, steps=1, front=np.zeros((3, 3), bool))
