@@ -120,6 +120,15 @@ The model beats the circle by +4 to +9 IoU points up to ~4 days. After that it b
 (85,000–122,000 ha new vs 9,600–22,000 ha observed) and is no better than the circle. FEDS is a single NRT
 fireid (11710) and the scores are from one fire, so treat them as a demo. Figure: `figures/fire_state_demo.png`.
 
+**Why 0.6–0.7 here vs 0.03 in the Bug hindcast:** the metric is the same (new-area IoU, code copied from
+`hindcast/metrics.py`) and so are the grid (100 m) and parameters (2 h per step, burn_prob ≥ 0.9). The starting
+state differs. Bug starts from a solid FEDS perimeter, and the new area is a thin ring (e.g. 9.8 → 10.8 km² in
+11 h), so a few cells of misplacement ruin the IoU. Here the start is a patchy radar mask (3,378 ha of scattered
+pixels), and the target is a solid FEDS polygon 5–6 times larger. Most of the "new" area is infill of gaps inside
+and around the start, which any growth fills: the circle also scores 0.54–0.61. The targets are also later
+(+22 h to +94 h, vs +11 h / +24 h) and the new areas larger (170–200 km² vs ~1–27 km²). So the high IoU mostly
+reflects an easy target, not a better model. The fair comparison is model vs circle: +4 to +9 points here.
+
 **Suggestions for spread_model (not changed here):** the over-prediction at long horizons comes from fixed
 start-hour weather and no burnout / suppression. Possible fixes: (1) hourly weather inside `simulate_spread`
 (the inputs already hold 26 h); (2) a per-step extinction or a cap on CA steps per day for night-time and
