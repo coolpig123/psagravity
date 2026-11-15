@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
+import { legendGradient, LEGEND_MAX_MS, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
@@ -50,6 +51,21 @@ type Prediction = {
     max_prob: number | null
     notes: string[]
   }
+}
+
+type WindStatus = { state: 'idle' | 'loading' | 'ok' | 'error'; message?: string }
+
+// 16-point compass name of a direction in degrees (0 = north, clockwise).
+function compass(deg: number): string {
+  const names = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+  return names[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16]
+}
+
+// "2026-08-09T21:00:00+00:00" -> "21:00-22:00": the hour a MERRA-2 hourly mean covers.
+function hourRange(hourStartIso: string): string {
+  const h = new Date(hourStartIso).getUTCHours()
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `${two(h)}:00–${two((h + 1) % 24)}:00`
 }
 
 // Area of the closed polygon on the Earth's surface, in km² (spherical formula, as in Turf.js).
@@ -140,6 +156,11 @@ function App() {
   const [predicting, setPredicting] = useState(false)
   const [error, setError] = useState('')
   const requestId = useRef(0) // answers of older requests (polygon cleared or redrawn meanwhile) are dropped
+  const windLayer = useRef<WindLayer | null>(null)
+  const [showWind, setShowWind] = useState(true)
+  const [wind, setWind] = useState<WindGrid | null>(null)
+  const [windStatus, setWindStatus] = useState<WindStatus>({ state: 'idle' })
+  const windRequest = useRef(0) // same as requestId, for the wind
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -158,6 +179,8 @@ function App() {
     map.touchZoomRotate.disableRotation()
     map.keyboard.disableRotation()
     mapRef.current = map
+    // Dev server only: lets browser tests move the map (window.__map.jumpTo(...)).
+    if (import.meta.env.DEV) (window as unknown as { __map: maplibregl.Map }).__map = map
 
     map.on('load', () => {
       // Where get_fire_inputs has full data (green) or not (red); built by backend/make_regions.py.
@@ -226,6 +249,8 @@ function App() {
         },
         'polygon-line',
       )
+      // Wind animation: speed colours under the prediction, particles on a canvas above the map.
+      windLayer.current = new WindLayer(map, container.current!.parentElement!, 'prediction-fill')
       setLoaded(true)
     })
 
@@ -279,6 +304,8 @@ function App() {
 
     return () => {
       window.removeEventListener('mouseup', endDrag)
+      windLayer.current?.destroy()
+      windLayer.current = null
       map.remove()
       mapRef.current = null
       setLoaded(false)
@@ -312,6 +339,50 @@ function App() {
       mapRef.current?.fitBounds([[w, s], [e, n]], { padding: 30, duration: 800 })
     }
   }, [prediction, loaded])
+
+  // Once the polygon is finished, fetch the MERRA-2 wind around it for the start time (again when the start
+  // time changes, after a short pause in typing). Drawing again or clearing removes it.
+  useEffect(() => {
+    const id = ++windRequest.current
+    const t = start.trim()
+    if (mode !== 'locked' || points.length < 3 || !t) {
+      setWind(null)
+      setWindStatus({ state: 'idle' })
+      return
+    }
+    setWindStatus({ state: 'loading' })
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/wind', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ polygon: toGeoJSON(points, 'locked'), start: t }),
+        })
+        if (res.status === 503) throw new Error('the Python server is not running (npm run dev)')
+        const data = await res.json().catch(() => null)
+        if (res.status === 404 && data?.no_data)
+          throw new Error('no MERRA-2 data for this start time yet (published 2-6 weeks after each month)')
+        if (res.status === 404) throw new Error('the Python server is older than the website: restart npm run dev')
+        if (!res.ok) throw new Error(data?.error ?? `the server answered ${res.status}`)
+        if (id !== windRequest.current) return
+        setWind(data as WindGrid)
+        setWindStatus({ state: 'ok' })
+      } catch (err) {
+        if (id !== windRequest.current) return
+        setWind(null)
+        setWindStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [mode, points, start])
+
+  useEffect(() => {
+    windLayer.current?.setData(wind)
+  }, [wind, loaded])
+
+  useEffect(() => {
+    windLayer.current?.setVisible(showWind && mode === 'locked')
+  }, [showWind, mode, loaded])
 
   // Clearing or redrawing the polygon removes the prediction and ignores one still on its way.
   const dropPrediction = () => {
@@ -436,10 +507,27 @@ ${err instanceof Error ? err.message : err}`)
           © OpenStreetMap contributors
         </a>
       </div>
-      <label className="regions">
-        <input type="checkbox" checked={showRegions} onChange={(e) => setShowRegions(e.target.checked)} />
-        regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data
-      </label>
+      <div className="options">
+        <label className="regions">
+          <input type="checkbox" checked={showRegions} onChange={(e) => setShowRegions(e.target.checked)} />
+          regions with full US fuel data (LANDFIRE + gridMET); Predict also runs elsewhere, with global data
+        </label>
+        {mode === 'locked' && (
+          <label className="regions wind">
+            <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
+            {windStatus.state === 'loading' && 'wind (loading MERRA-2…)'}
+            {windStatus.state === 'error' && <span className="wind-error">wind: {windStatus.message}</span>}
+            {windStatus.state === 'ok' && wind && (
+              <span
+                title={`MERRA-2 wind at 10 m, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)}, ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}
+              >
+                wind (MERRA-2): {wind.mean_speed_ms.toFixed(1)} m/s from {compass(wind.mean_dir_deg)}
+                <span className="wind-ramp" style={{ background: legendGradient() }} />
+              </span>
+            )}
+          </label>
+        )}
+      </div>
       <div className="panel">
         {predicting && <p>Fetching Earth Engine and NISAR data around the polygon and running the model. This can take a few minutes…</p>}
         {error && <p className="error">Prediction failed: {error}</p>}

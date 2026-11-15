@@ -99,3 +99,13 @@ def test_unknown_variable(tmp_path):
     g = pd.Series({"file": "x.nc4", "date": pd.Timestamp("2026-08-08", tz="UTC")})
     with pytest.raises(ValueError):
         m2.fetch_day(g, slice(0, 2), slice(0, 2), ["WIND"], tmp_path)
+
+
+def test_wind_grid_json(fake_remote, tmp_path):
+    w = m2.wind_grid(BUG_BBOX, "2026-08-09T21:40Z", margin_deg=1.0, cache_dir=tmp_path)
+    assert w["hour_start_utc"] == "2026-08-09T21:00:00+00:00" and w["time_utc"] == "2026-08-09T21:30:00+00:00"
+    assert len(w["u"]) == len(w["lat"]) and len(w["u"][0]) == len(w["lon"])
+    assert w["lat"] == sorted(w["lat"]) and w["lon"] == sorted(w["lon"])
+    assert w["mean_speed_ms"] == 5.0 and w["mean_dir_deg"] == 270.0
+    with pytest.raises(LookupError):
+        m2.wind_grid(BUG_BBOX, "2026-08-10T12:00Z", cache_dir=tmp_path)   # the unpublished day

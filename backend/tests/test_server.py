@@ -71,3 +71,39 @@ def test_predict_endpoint_errors(post):
     assert status == 500 and "Earth Engine is down" in out["error"]
     status, out = post("/api/nothing", {})
     assert status == 404
+
+
+SQUARE = {"type": "Polygon", "coordinates": [[[-120.1, 39.7], [-120.0, 39.7], [-120.0, 39.8], [-120.1, 39.7]]]}
+
+
+def test_polygon_bbox():
+    assert server.polygon_bbox(SQUARE) == (-120.1, 39.7, -120.0, 39.8)
+    feature = {"type": "Feature", "properties": {}, "geometry": SQUARE}
+    assert server.polygon_bbox({"type": "FeatureCollection", "features": [feature]}) == (-120.1, 39.7, -120.0, 39.8)
+    for bad in ({}, {"type": "Polygon", "coordinates": [[]]}, {"coordinates": [[[500, 0]]]}):
+        with pytest.raises(ValueError):
+            server.polygon_bbox(bad)
+
+
+def test_wind_endpoint(post, monkeypatch):
+    """/api/wind passes the polygon's box and the start time to firedata.merra2.wind_grid (mocked)."""
+    merra2 = pytest.importorskip("firedata.merra2")
+    seen = []
+
+    def fake_wind_grid(bbox, time, margin_deg):
+        seen.append((bbox, str(time), margin_deg))
+        if time.year == 2030:
+            raise LookupError("MERRA-2 M2T1NXSLV: no granule (not published yet?)")
+        return {"time_utc": "2026-08-09T21:30:00+00:00", "lat": [39.5, 40.0], "lon": [-120.625, -120.0],
+                "u": [[1, 1], [1, 1]], "v": [[0, 0], [0, 0]], "mean_speed_ms": 1.0, "mean_dir_deg": 270.0}
+    monkeypatch.setattr(merra2, "wind_grid", fake_wind_grid)
+
+    status, out = post("/api/wind", {"polygon": SQUARE, "start": "2026-08-09T21:00Z"})
+    assert status == 200 and out["mean_dir_deg"] == 270.0
+    assert seen == [((-120.1, 39.7, -120.0, 39.8), "2026-08-09 21:00:00+00:00", server.WIND_MARGIN_DEG)]
+    status, out = post("/api/wind", {"polygon": SQUARE, "start": "2030-01-01T00:00Z"})
+    assert status == 404 and out["no_data"] is True
+    status, out = post("/api/wind", {"polygon": SQUARE})
+    assert status == 400 and "start" in out["error"]
+    status, out = post("/api/wind", {"start": "2026-08-09T21:00Z"})
+    assert status == 400 and "polygon" in out["error"]
