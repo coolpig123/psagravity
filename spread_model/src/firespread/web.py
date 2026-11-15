@@ -3,7 +3,8 @@
 backend/server.py serves it as POST /api/predict:
 
     body = {"polygon": <GeoJSON>, "start": "2026-08-09T21:00Z",
-            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "steps": 30, "arrival": true}
+            "radius_km": 5.0, "res_m": 100.0, "use_nisar": true, "burn_scars": true, "steps": 30, "arrival": true,
+            "use_firms": true}     # use_firms: VIIRS detections of the last 12 h (NASA FIRMS) mark the active front
 
     -> {"cells":   GeoJSON FeatureCollection, one square per cell with burn_prob > MIN_PROB: the chance the
                    cell burns within `steps` CA steps (simulate.py; properties.p), ready for a MapLibre fill layer.
@@ -14,7 +15,8 @@ backend/server.py serves it as POST /api/predict:
         "summary": {main_direction, main_direction_deg, direction_strength, expected_new_area_km2,
                     weather_time_utc, weather_source, nisar_passes_used, nisar_coverage_pct, s2_clear_pct,
                     s2_burned_pct, sim_steps, sim_expected_area_km2, n_cells, n_map_cells, max_prob, text, notes,
-                    arrival, arrival_horizons_h, arrival_model, arrival_area_<h>h_km2}}
+                    arrival, arrival_horizons_h, arrival_model, arrival_area_<h>h_km2,
+                    active_detections, active_front_km2}}
                    (main_direction / expected_new_area_km2 are for the next single step)
 
 Only the polygon + radius_km is fetched from Earth Engine and NISAR (see predict()).
@@ -30,7 +32,7 @@ import xarray as xr
 from .alexandridis import DIRECTIONS, MASK_REASONS, shift, summary
 from .predict import predict
 from .simulate import DEFAULT_STEPS, simulate_spread
-from .survival import HORIZONS_H, predict_arrival
+from .survival import ACTIVE_HOURS, HORIZONS_H, attach_active_front, predict_arrival
 
 MIN_PROB = 0.01
 MAX_STEPS = 200
@@ -40,7 +42,8 @@ SUMMARY_KEYS = ("main_direction", "main_direction_deg", "direction_strength", "e
                 "expected_new_cells", "time_utc", "weather_time_utc", "weather_source", "weather_note",
                 "nisar_passes_used", "nisar_coverage_pct", "nisar_alignment", "s2_clear_pct", "s2_burned_pct",
                 "fire_touches_grid_edge", "sim_steps", "sim_runs", "sim_expected_area_km2", "sim_reached_grid_edge",
-                "arrival_model", *(f"arrival_area_{h}h_km2" for h in HORIZONS_H))
+                "arrival_model", *(f"arrival_area_{h}h_km2" for h in HORIZONS_H),
+                "active_detections", "active_front_km2")
 # cell properties for the arrival-time view: median hours + chance within each horizon (survival.py)
 ARRIVAL_PROPS = {"pe": "p_ever", "t50": "arrival_h", "t25": "arrival_h_q25", "t75": "arrival_h_q75", **{f"p{h}": f"p_arrive_{h}h" for h in HORIZONS_H}}
 
@@ -74,13 +77,37 @@ def parse_request(body: dict) -> dict:
             "res_m": number("res_m", 100.0, *RES_RANGE_M),
             "steps": int(number("steps", DEFAULT_STEPS, 1, MAX_STEPS)),
             "use_nisar": bool(body.get("use_nisar", True)), "burn_scars": bool(body.get("burn_scars", True)),
-            "arrival": bool(body.get("arrival", True))}
+            "arrival": bool(body.get("arrival", True)), "use_firms": bool(body.get("use_firms", True))}
 
 
 def default_nisar_provider():
     """The live NISAR provider from real_fires (firedata.nisar_provider). ImportError if it is not installed."""
     from firedata.nisar_provider import nisar_provider
     return nisar_provider()
+
+
+def default_detections_provider():
+    """Recent VIIRS detections from NASA FIRMS (firedata.firms, needs FIRMS_MAP_KEY in real_fires/.env), for the
+    active front: a function (bbox [west, south, east, north], start) -> DataFrame(time_utc, lat, lon, ...).
+    ImportError if real_fires is not installed."""
+    import tempfile
+    from pathlib import Path
+    from firedata import firms
+    from firedata.config import REPO_ROOT
+
+    def get(bbox, start):
+        t0 = pd.Timestamp(start)
+        t0 = t0.tz_localize("UTC") if t0.tzinfo is None else t0.tz_convert("UTC")
+        first = (t0 - pd.Timedelta(hours=ACTIVE_HOURS)).normalize()
+        last = t0.normalize() + pd.Timedelta(days=1)
+        name = "_".join(f"{v:.3f}" for v in bbox)
+        if last < pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=3):       # past days no longer change: cache
+            raw = firms.download_viirs(bbox, first, last, Path(REPO_ROOT) / "data" / "firms_cache" / "raw" / name)
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                raw = firms.download_viirs(bbox, first, last, Path(tmp))
+        return firms.tidy_viirs(raw)
+    return get
 
 
 def _guarded(provider, notes: list[str]):
@@ -171,7 +198,7 @@ def _plain(v):
 
 
 def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nisar_provider,
-                    arrival_fn=predict_arrival) -> dict:
+                    arrival_fn=predict_arrival, detections_factory=default_detections_provider) -> dict:
     """POST /api/predict: request body -> response dict. ValueError for a bad request."""
     req = parse_request(body)
     notes: list[str] = []
@@ -188,6 +215,16 @@ def predict_payload(body: dict, *, predict_fn=predict, nisar_factory=default_nis
         notes.append(f"the simulated fire reached the edge of the {req['radius_km']:g} km area around the polygon; "
                      "spread beyond it is not computed (use fewer steps or a larger radius)")
     arrival = False
+    if req["arrival"] and req["use_firms"]:      # the active front: where VIIRS saw fire in the last hours
+        try:
+            result = attach_active_front(result, detections_factory()(_bounds(result), req["start"]), req["start"])
+            if not result.attrs.get("active_detections"):
+                notes.append(f"no VIIRS detection on the polygon in the {ACTIVE_HOURS:g} h before the start: the whole "
+                             "polygon is taken as the active front")
+        except ImportError as e:
+            notes.append(f"active front skipped: the FIRMS reader is not installed (pip install -e real_fires): {e}")
+        except Exception as e:                   # no FIRMS_MAP_KEY, FIRMS down, no source for that date, ...
+            notes.append(f"active front skipped ({type(e).__name__}: {e}): the whole polygon is taken as the front")
     if req["arrival"]:
         try:
             result = arrival_fn(result, req["start"])

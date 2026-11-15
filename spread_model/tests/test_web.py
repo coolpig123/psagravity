@@ -10,7 +10,7 @@ from test_alexandridis import C, N, make_ds
 
 POLYGON = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
     "type": "Polygon", "coordinates": [[[-120.05, 39.72], [-120.03, 39.72], [-120.03, 39.74], [-120.05, 39.72]]]}}]}
-BODY = {"polygon": POLYGON, "start": "2026-08-09T21:00Z"}
+BODY = {"polygon": POLYGON, "start": "2026-08-09T21:00Z", "use_firms": False}   # offline: no FIRMS request
 
 
 def fake_predict(seen):
@@ -26,9 +26,9 @@ def fake_predict(seen):
 
 
 def test_parse_request_defaults_and_errors():
-    req = parse_request(BODY)
+    req = parse_request({k: v for k, v in BODY.items() if k != "use_firms"})
     assert req == {"polygon": POLYGON, "start": "2026-08-09T21:00:00+00:00", "radius_km": 5.0, "res_m": 100.0,
-                   "steps": 30, "use_nisar": True, "burn_scars": True, "arrival": True}
+                   "steps": 30, "use_nisar": True, "burn_scars": True, "arrival": True, "use_firms": True}
     assert parse_request({**BODY, "steps": 5})["steps"] == 5
     with pytest.raises(ValueError):
         parse_request({**BODY, "steps": 0})

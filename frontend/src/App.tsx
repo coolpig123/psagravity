@@ -58,6 +58,9 @@ type Prediction = {
     arrival_area_12h_km2?: number
     arrival_area_24h_km2?: number
     arrival_area_48h_km2?: number
+    // VIIRS detections (NASA FIRMS) in the 12 h before the start that mark the active front; 0 / absent = whole polygon
+    active_detections?: number
+    active_front_km2?: number
   }
 }
 
@@ -556,6 +559,11 @@ ${err instanceof Error ? err.message : err}`)
                     {h} h {(s[`arrival_area_${h}h_km2` as keyof typeof s] as number | undefined)?.toFixed(1)} km²
                   </span>
                 ))}
+                {'. '}
+<b>Active front:</b>{' '}
+                {s.active_detections
+                  ? `${s.active_front_km2?.toFixed(1)} km² (${s.active_detections} VIIRS detections in the last 12 h)`
+                  : 'the whole polygon'}
                 {'. '}
                 <span className="model-name">{s.arrival_model}</span>
               </p>
