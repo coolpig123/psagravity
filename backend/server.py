@@ -13,9 +13,15 @@ POST /api/predict   body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z", "ra
                     Runs the spread model (firespread.predict) on the polygon + radius_km only and returns the
                     ignition-probability cells as GeoJSON plus a summary; see spread_model/src/firespread/web.py.
                     Needs spread_model (and real_fires for NISAR) in the venv; see frontend/README.md.
+
+POST /api/wind      body: {"bbox": [west, south, east, north], "start": "2026-08-09T21:00Z"}
+                    MERRA-2 10 m wind (u, v on its ~55 km grid) of the hour containing "start", over the
+                    map view at any zoom (widened to 5 deg tiles, coarser when zoomed out), for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
+                    and the Earthdata login in real_fires/.env. 404 = MERRA-2 has no data for that time yet.
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -117,11 +123,50 @@ def run_predict(body: dict) -> dict:
         pass
     t0 = time.time()
     out = predict_payload(body)
-    print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_cells']} cells on the map")
+    print(f"predict done in {time.time() - t0:.0f} s: {out['summary']['n_map_cells']} cells on the map")
     print(out["summary"]["text"])
     for note in out["summary"]["notes"]:
         print(f"NOTE: {note}")
     sys.stdout.flush()
+    return out
+
+
+# The wind fills the visible map at any zoom (POST /api/wind with the map's bbox). The box is widened to a 5 deg
+# tile grid, so panning and zooming near the same place reuse the same data. A view that shows the date line or
+# copies of the world asks for all longitudes. Large views get a coarser grid (firedata.merra2.wind_grid).
+WIND_TILE_DEG = 5.0
+
+
+def wind_view_bbox(bbox) -> tuple[float, float, float, float]:
+    """The map view [west, south, east, north] -> the box to read: snapped out to the tiles, all longitudes if
+    the view crosses the date line. ValueError if malformed."""
+    try:
+        w, s, e, n = (float(v) for v in bbox)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"bbox: [west, south, east, north] in degrees is required ({err})") from None
+    if not (w < e and s < n) or any(map(math.isnan, (w, s, e, n))):
+        raise ValueError(f"bbox: west < east and south < north are required, got {bbox}")
+    if w < -180 or e > 180:
+        w, e = -180.0, 180.0
+    s, n = max(-90.0, s), min(90.0, n)
+    t = WIND_TILE_DEG
+    return (max(-180.0, math.floor(w / t) * t), max(-90.0, math.floor(s / t) * t),
+            min(180.0, math.ceil(e / t) * t), min(90.0, math.ceil(n / t) * t))
+
+
+def run_wind(body: dict) -> dict:
+    """POST /api/wind: MERRA-2 wind over the map view. ValueError = bad request, LookupError = no data yet."""
+    from firedata.merra2 import wind_grid   # imported here so the other endpoints work without it
+    bbox = wind_view_bbox(body.get("bbox"))
+    try:
+        start = pd.Timestamp(body["start"])
+    except (KeyError, ValueError, TypeError) as e:
+        raise ValueError(f"start: an ISO time in UTC is required ({e})") from None
+    t0 = time.time()
+    out = wind_grid(bbox, start)
+    out["bbox"] = list(bbox)   # where the wind is complete (without the faded edge)
+    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells (every {out['stride']}) "
+          f"over {bbox} ({time.time() - t0:.1f} s)", flush=True)
     return out
 
 
@@ -139,6 +184,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(page)
 
     def do_POST(self) -> None:
+        if self.path == "/api/wind":
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                self._reply(200, run_wind(body))
+            except ValueError as e:      # bad JSON, bbox or start
+                self._reply(400, {"error": f"bad request: {e}"})
+            except LookupError as e:     # MERRA-2 not published yet for that time
+                self._reply(404, {"error": str(e), "no_data": True})
+            except Exception as e:       # Earthdata login, GES DISC down, ...
+                print(f"\nwind failed: {type(e).__name__}: {e}", flush=True)
+                self._reply(500, {"error": f"wind failed: {type(e).__name__}: {e}"})
+            return
         if self.path == "/api/predict":
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))

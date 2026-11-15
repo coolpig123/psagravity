@@ -10,7 +10,7 @@ from test_alexandridis import C, N, make_ds
 
 POLYGON = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
     "type": "Polygon", "coordinates": [[[-120.05, 39.72], [-120.03, 39.72], [-120.03, 39.74], [-120.05, 39.72]]]}}]}
-BODY = {"polygon": POLYGON, "start": "2026-08-09T21:00Z"}
+BODY = {"polygon": POLYGON, "start": "2026-08-09T21:00Z", "use_firms": False}   # offline: no FIRMS request
 
 
 def fake_predict(seen):
@@ -26,9 +26,9 @@ def fake_predict(seen):
 
 
 def test_parse_request_defaults_and_errors():
-    req = parse_request(BODY)
+    req = parse_request({k: v for k, v in BODY.items() if k != "use_firms"})
     assert req == {"polygon": POLYGON, "start": "2026-08-09T21:00:00+00:00", "radius_km": 5.0, "res_m": 100.0,
-                   "steps": 30, "use_nisar": True, "burn_scars": True, "active_front": True}
+                   "steps": 30, "use_nisar": True, "burn_scars": True, "arrival": True, "use_firms": True}
     assert parse_request({**BODY, "steps": 5})["steps"] == 5
     with pytest.raises(ValueError):
         parse_request({**BODY, "steps": 0})
@@ -42,15 +42,15 @@ def test_parse_request_defaults_and_errors():
 
 def test_predict_payload_calls_predict_and_returns_map_cells():
     seen = {}
-    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False, "steps": 3},
+    out = predict_payload({**BODY, "radius_km": 3, "use_nisar": True, "burn_scars": False, "steps": 3, "arrival": False},
                           predict_fn=fake_predict(seen), nisar_factory=lambda: (lambda request: None))
     assert seen["polygon"] == POLYGON and seen["start"] == "2026-08-09T21:00:00+00:00"
     assert seen["radius_km"] == 3.0 and seen["res_m"] == 100.0 and seen["burn_scars"] is False
     assert callable(seen["nisar"])
-    assert seen["active_front"] is True and seen["notes"] is out["summary"]["notes"]
+    assert seen["active_front"] is False and seen["notes"] is out["summary"]["notes"]   # BODY: use_firms False
     assert out["summary"]["active_front_source"] == "whole burned area"
-    assert predict_payload({**BODY, "active_front": False, "use_nisar": False},
-                           predict_fn=fake_predict(seen))["summary"]["n_cells"] > 0 and seen["active_front"] is False
+    assert predict_payload({**BODY, "use_firms": True, "arrival": False, "use_nisar": False},   # no FIRMS call here
+                           predict_fn=fake_predict(seen))["summary"]["n_cells"] > 0 and seen["active_front"] is True
 
     cells = out["cells"]["features"]
     assert 8 < len(cells) <= 48 and len(cells) == out["summary"]["n_cells"]   # beyond the first ring, within 3 steps
@@ -149,3 +149,38 @@ def test_nisar_attrs_reach_the_result():
     res = predict(inputs=ds, nisar=nisar)
     assert res.attrs["nisar_passes_used"] == "2026-08-04 A34" and res.attrs["nisar_coverage_pct"] == 100.0
     assert "other" not in res.attrs and "nisar_alignment" in res.attrs
+
+
+def test_parse_request_and_payload_with_meteomatics_and_timeline():
+    import xarray as xr
+
+    req = parse_request({**BODY, "weather_source": "meteomatics", "hours": 12})
+    assert req["weather_source"] == "meteomatics" and req["hours"] == 12.0
+    with pytest.raises(ValueError, match="weather_source"):
+        parse_request({**BODY, "weather_source": "invalid_source"})
+
+    seen = {}
+
+    def fake_forecast_predict(**kw):
+        seen.update(kw)
+        ds0 = make_ds(u=4.0, v=0.0, temp=29.0, rh=22.0)
+        ds1 = make_ds(u=2.0, v=5.0, temp=26.0, rh=30.0).assign_coords(
+            time=np.array(["2026-08-09T22:00"], dtype="datetime64[ns]")
+        )
+        ds = xr.concat([ds0, ds1], dim="time", data_vars="minimal")
+        ds.attrs.update({"weather_source": "meteomatics", "weather_dataset": "Meteomatics API (mix)"})
+        return spread_probabilities(ds)
+
+    out = predict_payload(
+        {**BODY, "weather_source": "meteomatics", "hours": 12, "use_nisar": False, "steps": 6},
+        predict_fn=fake_forecast_predict,
+    )
+    assert seen["weather_source"] == "meteomatics" and seen["hours"] == 12.0
+    summary = out["summary"]
+    assert summary["weather_source"] == "meteomatics"
+    assert summary["sim_time_developing"] == 1
+    assert summary["sim_weather_steps"] == 2
+    assert len(summary["weather_timeline"]) == 2
+    assert summary["weather_timeline"][0]["wind_speed_ms"] == pytest.approx(4.0)
+    json.dumps(out, allow_nan=False)
+

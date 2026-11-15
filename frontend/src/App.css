@@ -95,11 +95,13 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
   margin-left: 10px;
 }
 
-.start input {
+.start input,
+.start select {
   font: 13px ui-monospace, Consolas, monospace;
   padding: 6px 8px;
   border: 1px solid #d0d0d0;
   border-radius: 6px;
+  background: #fff;
 }
 
 /* Prediction summary under the map. */
@@ -124,6 +126,15 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
   background: linear-gradient(to right, #ffd23f, #ff9f1c 25%, #f3722c 50%, #d62828 75%, #6a040f);
 }
 
+/* Arrival hours: soon (dark red) -> later (pale yellow); stops at 0, 6, 12, 24, 48, 96 h of 96. */
+.ramp.hours {
+  background: linear-gradient(to right, #6a040f, #d62828 6%, #f3722c 12%, #ff9f1c 25%, #ffd23f 50%, #fff3b0);
+}
+
+.panel .view { margin-right: 10px; }
+.panel .view select { font: inherit; padding: 2px 4px; }
+.panel .model-name { color: #777; font-size: 12px; }
+
 /* Area of the polygon: a pill, green up to 400 km², red above. */
 .area {
   margin-left: auto;
@@ -144,8 +155,32 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 .area.ok { color: #1f7a32; background: #e3f5e7; }
 .area.too-big { color: #c01f1f; background: #fde4e4; }
 
-.regions {
+/* Row of map options under the map: regions, then wind (after Finish). */
+/* Always one line: a long wind message is cut ("…", full text on hover) instead of wrapping, because a taller row
+   would shrink the map, and every map resize asks for the wind again. */
+.options {
   width: var(--content-width);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  column-gap: 24px;
+  white-space: nowrap;
+}
+
+.options .regions { flex: none; }
+
+.options .regions.wind {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.options .regions.wind > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.regions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -174,6 +209,7 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 /* Required OpenStreetMap credit, bottom-right corner of the map. */
 .credit {
   position: absolute;
+  z-index: 2; /* above the wind canvas */
   right: 0;
   bottom: 0;
   padding: 1px 6px;
@@ -191,4 +227,135 @@ body { font-family: 'Inter', system-ui, sans-serif; background: #f6f6f6; }
 .map {
   width: 100%;
   height: 100%;
+}
+
+/* Wind particles (wind.ts), above the map tiles; clicks go through to the map. */
+.wind-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.wind-ramp {
+  display: inline-block;
+  width: 60px;
+  height: 10px;
+  margin: 0 2px 0 6px;
+  vertical-align: middle;
+  border-radius: 2px;
+}
+
+.wind-error { color: #8a5a00; }
+
+/* Place search and "my location" button, floating at the top-left of the map (LocationSearch.tsx). */
+.location-search {
+  position: absolute;
+  z-index: 3; /* above the wind canvas and the credit */
+  top: 10px;
+  left: 10px;
+  width: min(420px, calc(100% - 20px));
+  font: 14px 'Inter', system-ui, sans-serif;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.search-row .search-icon {
+  width: 16px;
+  height: 16px;
+  color: #888;
+  flex: none;
+}
+
+.search-row input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  padding: 6px 8px;
+  font: inherit;
+  background: transparent;
+}
+
+.search-row input::-webkit-search-cancel-button { display: none; } /* we have our own clear button */
+
+.icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #444;
+  cursor: pointer;
+}
+
+.icon-button svg { width: 18px; height: 18px; }
+.icon-button:not(:disabled):hover { background: #f0f0f0; color: #d62828; }
+.icon-button:disabled { opacity: 0.4; cursor: default; }
+
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.search-results {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 0;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.search-results-title {
+  padding: 2px 12px 4px;
+  font-size: 12px;
+  color: #888;
+}
+
+.search-results button {
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  font: 13px 'Inter', system-ui, sans-serif;
+  color: #222;
+  cursor: pointer;
+}
+
+.search-results button:hover { background: #f6f6f6; }
+
+.search-message {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #fff8e6;
+  color: #8a5a00;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* The user's position: blue dot with a white ring. */
+.my-location-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1a73e8;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 6px rgba(26, 115, 232, 0.25), 0 1px 3px rgba(0, 0, 0, 0.4);
 }

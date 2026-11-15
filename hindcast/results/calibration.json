@@ -1,0 +1,8 @@
+{
+  "fire": "bug_fire",
+  "window": "bug_fire_0809_0930",
+  "hours_per_step": 2.0,
+  "threshold": 0.9,
+  "mean_iou_new": 0.027,
+  "note": "Scores are vs FEDS perimeters, which under-map the official WFIGS area (Bug FEDS = 37.8 % of official, Biscar 11.2 %)."
+}

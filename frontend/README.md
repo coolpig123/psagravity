@@ -33,6 +33,32 @@ npm run dev                                             # then open http://local
 
 Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\server.py` runs the server alone (port 8000).
 
+## Finding a place
+
+When the website opens it asks the browser for your location; if you allow it, the map flies there (blue dot).
+Either way, the search bar at the top-left of the map finds any place (type it, press Enter): the map flies there,
+framing the place a little zoomed out, and lists the other matches below the bar. The target button next to it goes
+back to your location. Places come from [OpenStreetMap Nominatim](https://nominatim.org/) (free, no key; one
+search per Enter, as its usage policy asks), so this also works on the GitHub Pages version.
+
+## Wind
+
+The wind is on from the moment the website opens, with or without a polygon: the whole map is covered with the wind
+at the **Start (UTC)** time, at any zoom up to the whole world, in the style of
+[earth.nullschool.net](https://earth.nullschool.net): colours = wind speed (0-20 m/s scale next to the toggle),
+moving white lines = particles carried by the wind. Pan or zoom and the wind follows the view (new data only when the
+view leaves the area already loaded, which is widened to 5° tiles, or when zooming in deserves a finer grid: zoomed
+far out the server sends every 2nd-3rd MERRA-2 cell). The **wind** checkbox (right of the regions checkbox) turns it
+off and on; changing the start time reloads it. Once a polygon is drawn, the label also gives the wind at the
+polygon; hover it for the hour and source.
+
+The data is NASA **MERRA-2** 10 m wind (hourly means, ~55 km grid), read by the server (`POST /api/wind`,
+[firedata.merra2](../real_fires/src/firedata/merra2.py)) from GES DISC: only the area on screen, a few
+seconds the first time and instant after (cached in `real_fires/data/merra2_cache/raw`). It needs `earthaccess` in the
+server's venv (the `real_fires\requirements.txt` install above) and your Earthdata login in `real_fires\.env`, with the
+application "NASA GESDISC DATA ARCHIVE" approved once in your Earthdata profile. MERRA-2 is published 2-6 weeks
+after each month, so recent start times say "no MERRA-2 data for this start time yet".
+
 ## Predict where the fire spreads
 
 1. Zoom to the fire, press **Draw**, click the outline of the burning area, press **Finish**.
@@ -46,6 +72,15 @@ cover, weather, Sentinel-2 burn scars) and NISAR (ASF), runs the spread model fo
 within those steps (yellow -> orange -> red). Under the
 map: the most likely spread direction, the expected new burned area, and the weather time, NISAR passes and
 Sentinel-2 coverage that were used. **Clear** or **Draw** removes the prediction.
+
+**Arrival times:** the server also runs the survival model (`spread_model/src/firespread/survival.py`, trained on
+the real fires). Under the map, **Show** switches the colours between the CA chance, the **chance the fire ever
+gets there**, the **median hours until it arrives if it does** (dark red = soon, yellow = days; cells with at least a
+10% chance), and the **chance it arrives within 6 / 12 / 24 / 48 h**. Click a cell for all its numbers, including the
+25-75% range of the arrival time (fire speed varies ~10x between fires, so the range is wide). The panel gives the expected burned area within each horizon. Needs `xgboost` and `scipy`
+in the server's venv (`pip install -r spread_model/requirements.txt`); without them, or without the model file, the
+map shows the CA chance only and a note says why. How good it is: see "When: arrival time per cell" in
+[spread_model/README.md](../spread_model/README.md).
 
 Expect **about 1 minute** from pressing Predict to the map (measured near the Bug Fire: 75 s for a new area,
 68 s for a polygon 1 km from an earlier one, 52 s for the same polygon again). Most of it is the Sentinel-2 burn

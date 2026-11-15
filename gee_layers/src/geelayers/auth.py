@@ -11,8 +11,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import ee
 from dotenv import load_dotenv
+
+from ._ee_compat import ee
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]   # gee_layers/
 load_dotenv(PROJECT_DIR / ".env")

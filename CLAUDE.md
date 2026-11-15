@@ -33,6 +33,7 @@ by NISAR since June 2026.
 
 ```
 README.md, CLAUDE.md, .gitignore, docs/architecture.png   # the only things in the repo root
+.github/workflows/pages.yml                              # publishes master on GitHub Pages
 real_fires/                                              # ground truth from real fires
   src/firedata/                                          # reusable functions (repeat per fire)
   scripts/                                               # build_ground_truth.py, test_app.py
