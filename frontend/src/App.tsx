@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
+import LocationSearch from './LocationSearch'
 import { boxCovers, legendGradient, LEGEND_MAX_MS, sampleWind, strideFor, tileBox, viewBox, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
@@ -682,6 +683,7 @@ ${err instanceof Error ? err.message : err}`)
       <div className="hint">{hint}</div>
       <div className="map-wrap">
         <div ref={container} className="map" />
+        <LocationSearch map={loaded ? mapRef.current : null} />
         <a className="credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
           © OpenStreetMap contributors
         </a>
