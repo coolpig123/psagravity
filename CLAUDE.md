@@ -45,6 +45,9 @@ gee_layers/                                              # model inputs from Goo
   src/geelayers/, tests/, data/ (outputs, not committed), .env (EE_PROJECT), README.md
 spread_model/                                            # Alexandridis spread probabilities (package firespread)
   src/firespread/, tests/, data/ (outputs, not committed), README.md (formulas)
+israel_static/                                           # the published site without a server (Haifa only)
+  scripts/build_haifa_data.py                            # downloads the data into frontend/public/haifa/ (committed)
+  browser/ (Python run in the browser), tests/, data/ (download caches, not committed), README.md
 ```
 
 Never put new files in the repo root. Every output goes in a folder with a clear name (real_fires/app/,
