@@ -89,12 +89,24 @@ class AlexandridisParams:
     #   P_spot_launch(i) = clip(spot_prob * (1 + P_veg[i]) * (1 + P_den[i]) * (1 - exp(-(V - V_min) / V_scale)), 0, 1)
     # Landing cell j ignites with probability P_spot_ignite(j) = clip(P0 (1 + P_veg[j])(1 + P_den[j]) P_m[j] P_mask[j], 0, 1).
     spot_prob: float = 0.12                 # base per-step launch probability at high wind (0 disables spotting)
+    spot_use_gust: bool = True              # loft firebrands using wind gusts (gust_ms) when present in inputs
     spot_min_wind_ms: float = 6.0           # no lofting below this wind speed (m/s)
     spot_wind_scale_ms: float = 4.0         # wind scale for launch probability (m/s above spot_min_wind_ms)
     spot_min_m: float = 200.0               # minimum jump distance (m)
     spot_wind_dist_m_per_ms: float = 120.0  # added mean jump distance per m/s above spot_min_wind_ms
     spot_max_m: float = 3000.0              # maximum jump distance (m)
     spot_cone_deg: float = 15.0             # angular spread (std dev, degrees) around the downwind bearing
+
+    @classmethod
+    def calibrated(cls) -> AlexandridisParams:
+        """Parameters fitted on 57 FEDS 12 h segments across 4 Western US fires (Biscar, Bug, Colwash, Crosswhite)."""
+        return cls(
+            p0=0.93, c1=0.095, c2=0.057, a=0.056, b_emc=0.006,
+            veg_by_lifeform={1: 0.4, 2: 0.21, 3: 0.16},
+            diagonal_factor=1.0,
+            spot_prob=0.45, spot_use_gust=True, spot_min_wind_ms=5.8,
+            spot_min_m=260.0, spot_wind_dist_m_per_ms=237.0, spot_max_m=7000.0, spot_cone_deg=9.5,
+        )
 
 
 # ---- the factors -----------------------------------------------------------------------------
@@ -268,7 +280,8 @@ def p_slope(theta_s_deg: np.ndarray, params: AlexandridisParams) -> np.ndarray:
 
 
 def p_spot(u: np.ndarray, v: np.ndarray, veg: np.ndarray, den: np.ndarray,
-           target_factor: np.ndarray, params: AlexandridisParams) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+           target_factor: np.ndarray, params: AlexandridisParams,
+           gust: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Spotting (firebrand) fields per cell:
       p_spot_launch (y, x): probability a burning cell launches a firebrand in one CA step
       p_spot_ignite (y, x): probability a landed firebrand ignites the cell (0 on water/scars/unburnable)
@@ -276,6 +289,8 @@ def p_spot(u: np.ndarray, v: np.ndarray, veg: np.ndarray, den: np.ndarray,
       spot_dir_deg  (y, x): downwind compass bearing (degrees clockwise from N)
     """
     speed = np.hypot(u, v)
+    if gust is not None and params.spot_use_gust:
+        speed = np.maximum(speed, gust)
     toward_deg = (np.degrees(np.arctan2(u, v)) % 360.0).astype(np.float32)
     if params.spot_prob <= 0 or params.spot_max_m <= 0:
         zeros = np.zeros(u.shape, np.float32)
@@ -374,7 +389,8 @@ def spread_probabilities(ds: xr.Dataset, burning: np.ndarray | None = None, time
 
     # target-cell factor, combined once: P0 (1 + P_veg)(1 + P_den) P_m P_mask
     target_factor = params.p0 * (1 + veg) * (1 + den) * moist * mask
-    spot_launch, spot_ignite, spot_dist_m, spot_dir_deg = p_spot(u, v, veg, den, target_factor, params)
+    gust = np.nan_to_num(snap["gust_ms"].values.astype(np.float32)) if "gust_ms" in snap else None
+    spot_launch, spot_ignite, spot_dist_m, spot_dir_deg = p_spot(u, v, veg, den, target_factor, params, gust=gust)
 
     n = len(DIRECTIONS)
     pw = np.empty((n, *shape), np.float32)

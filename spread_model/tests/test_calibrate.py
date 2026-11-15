@@ -51,3 +51,14 @@ def test_target_rasterises_on_the_grid():
     (w, e), (s, n) = to_ll.transform([x - 0.4 * r, x + 1.4 * r], [y - 0.4 * r, y + 0.4 * r])
     t = _target(res, box(w, s, e, n))                      # covers the fire cell and the one east of it
     assert t[C, C] and t[C, C + 1] and t.sum() == 2
+
+
+def test_calibrated_preset_and_search_params():
+    from firespread import AlexandridisParams
+    from firespread.calibrate_search import CALIBRATED, params_of
+    cal = AlexandridisParams.calibrated()
+    p = params_of(CALIBRATED)
+    assert cal.p0 == p.p0 and cal.c1 == p.c1 and cal.c2 == p.c2
+    assert cal.veg_by_lifeform[2] > 0 and cal.veg_by_lifeform[3] > 0
+    res = spread_probabilities(make_ds(u=7.0), params=cal)
+    assert float(res["p_spot_launch"].max()) > 0.0

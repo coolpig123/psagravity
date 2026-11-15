@@ -117,19 +117,27 @@ def fetch(fire: str, max_segments: int | None = None) -> list[Path]:
 
 
 ACTIVE_HOURS = 12.0           # VIIRS detections this long before the segment start = the active front
+_FIRE_POINTS: dict[str, pd.DataFrame] = {}
+
+
+def _viirs_points(fire: str) -> pd.DataFrame:
+    if fire not in _FIRE_POINTS:
+        proc = FIRES_DIR / fire / "processed"
+        pts = pd.read_parquet(proc / "fire_points.parquet") if (proc / "fire_points.parquet").exists() \
+            else pd.read_csv(proc / "fire_points.csv")
+        pts["time_utc"] = pd.to_datetime(pts["time_utc"], utc=True)
+        pts = pts[pts["source"].astype(str).str.contains("VIIRS", case=False)]
+        if "ambiguous" in pts:
+            pts = pts[~pts["ambiguous"].astype(bool)]
+        _FIRE_POINTS[fire] = pts
+    return _FIRE_POINTS[fire]
 
 
 def active_front(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> np.ndarray | None:
     """Cells with a VIIRS detection in the ACTIVE_HOURS before t0 (where the fire was really burning), or None."""
     from pyproj import Transformer
-    proc = FIRES_DIR / fire / "processed"
-    pts = pd.read_parquet(proc / "fire_points.parquet") if (proc / "fire_points.parquet").exists() \
-        else pd.read_csv(proc / "fire_points.csv")
-    pts["time_utc"] = pd.to_datetime(pts["time_utc"], utc=True)
-    pts = pts[pts["source"].astype(str).str.contains("VIIRS", case=False)
-              & (pts["time_utc"] > t0 - pd.Timedelta(hours=ACTIVE_HOURS)) & (pts["time_utc"] <= t0)]
-    if "ambiguous" in pts:
-        pts = pts[~pts["ambiguous"].astype(bool)]
+    pts = _viirs_points(fire)
+    pts = pts[(pts["time_utc"] > t0 - pd.Timedelta(hours=ACTIVE_HOURS)) & (pts["time_utc"] <= t0)]
     if pts.empty:
         return None
     px, py = Transformer.from_crs(4326, ds.attrs["crs"], always_xy=True).transform(pts["lon"].values,
@@ -141,6 +149,17 @@ def active_front(ds: xr.Dataset, fire: str, t0: pd.Timestamp) -> np.ndarray | No
     ok = (row >= 0) & (row < y.size) & (col >= 0) & (col < x.size)
     out = np.zeros((y.size, x.size), bool)
     out[row[ok], col[ok]] = True
+    if out.any() and "initial_burned" in ds:
+        # FEDS buffers VIIRS detections by ~500 m when building the start polygon, leaving ~2/3 of VIIRS cell centres
+        # 1 cell inside `start` with no unburned neighbours. Activate adjacent outer-rim cells of `start` as well.
+        start = ds["initial_burned"].values.astype(bool)
+        u = np.pad(~start, 1, constant_values=True)
+        outer_rim = start & (u[:-2, :-2] | u[:-2, 1:-1] | u[:-2, 2:]
+                             | u[1:-1, :-2] | u[1:-1, 2:]
+                             | u[2:, :-2] | u[2:, 1:-1] | u[2:, 2:])
+        p = np.pad(out, 1, constant_values=False)
+        near = p[1:-1, 1:-1] | p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]
+        out = out | (outer_rim & near)
     return out if out.any() and res > 0 else None
 
 

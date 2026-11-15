@@ -72,6 +72,10 @@ def test_spotting_fields_and_moisture_dependence():
     assert float(windy_dry["p_spot_launch"].max()) > 0.0
     assert float(windy_dry["p_spot_ignite"][C, C + 1]) > float(windy_wet["p_spot_ignite"][C, C + 1])
     assert float(windy_dry["p_spot_ignite"][C, C]) == 0.0     # already burning -> P_mask = 0
+    # gusts loft firebrands even when 10 m mean wind is below spot_min_wind_ms
+    gusty = make_ds(u=4.0)
+    gusty["gust_ms"] = (("time", "y", "x"), np.full((1, N, N), 11.0, np.float32))
+    assert float(spread_probabilities(gusty)["p_spot_launch"].max()) > 0.0
 
 
 def test_bad_arguments():
