@@ -33,6 +33,20 @@ npm run dev                                             # then open http://local
 
 Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\server.py` runs the server alone (port 8000).
 
+## Wind
+
+After **Finish**, the map shows the wind around the polygon (about 1.5° on each side) at the **Start (UTC)** time,
+in the style of [earth.nullschool.net](https://earth.nullschool.net): colours = wind speed (0-20 m/s scale next to
+the toggle), moving white lines = particles carried by the wind. The **wind** checkbox (right of the regions
+checkbox) turns it off and on; changing the start time reloads it. Hover the label for the exact hour and source.
+
+The data is NASA **MERRA-2** 10 m wind (hourly means, ~55 km grid), read by the server (`POST /api/wind`,
+[firedata.merra2](../real_fires/src/firedata/merra2.py)) from GES DISC: only the box around the polygon, a few
+seconds the first time and instant after (cached in `real_fires/data/merra2_cache/raw`). It needs `earthaccess` in the
+server's venv (the `real_fires\requirements.txt` install above) and your Earthdata login in `real_fires\.env`, with the
+application "NASA GESDISC DATA ARCHIVE" approved once in your Earthdata profile. MERRA-2 is published 2-6 weeks
+after each month, so recent start times say "no MERRA-2 data for this start time yet".
+
 ## Predict where the fire spreads
 
 1. Zoom to the fire, press **Draw**, click the outline of the burning area, press **Finish**.

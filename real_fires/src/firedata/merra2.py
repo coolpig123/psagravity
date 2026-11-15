@@ -313,6 +313,45 @@ def point_series(ds: xr.Dataset, lat: float, lon: float) -> pd.DataFrame:
     return df
 
 
+WIND_VARIABLES = ("U10M", "V10M")
+
+
+def wind_grid(bbox: tuple[float, float, float, float], time, margin_deg: float = 1.5,
+              cache_dir: Path | None = None, method: str = "opendap") -> dict:
+    """10 m wind of the MERRA-2 hour that contains `time`, on the cells around bbox + margin, as plain JSON.
+
+    {"time_utc", "hour_start_utc", "lat": [south -> north], "lon": [west -> east], "u", "v": [lat][lon] m/s,
+     "speed_max", "mean_speed_ms", "mean_dir_deg", "source", "resolution"}. LookupError if MERRA-2 has no data
+    for that day yet (published ~2-6 weeks after the month ends).
+    """
+    t = _utc(time)
+    hour = t.floor("h")
+    ds = open_box(bbox, hour, hour + pd.Timedelta(hours=1), WIND_VARIABLES, margin_deg=margin_deg,
+                  cache_dir=cache_dir, method=method, derived=False)
+    if ds.sizes.get("time", 0) == 0:
+        raise LookupError(f"MERRA-2 has no data for {hour:%Y-%m-%d %H:%M} UTC yet")
+    one = ds.isel(time=0).sortby("lat").sortby("lon")
+    u, v = one.U10M.values.astype(float), one.V10M.values.astype(float)
+    ok = np.isfinite(u) & np.isfinite(v)
+    if not ok.any():
+        raise LookupError(f"MERRA-2 wind is missing at {hour:%Y-%m-%d %H:%M} UTC")
+    speed = np.hypot(u, v)
+    _, mean_dir = wind_speed_dir(u[ok].mean(), v[ok].mean())
+    r = lambda a: np.where(np.isfinite(a), np.round(a, 2), 0.0).tolist()  # noqa: E731
+    return {
+        "time_utc": pd.Timestamp(one.time.values).tz_localize("UTC").isoformat(),
+        "hour_start_utc": hour.isoformat(),
+        "lat": np.round(one.lat.values.astype(float), 4).tolist(),
+        "lon": np.round(one.lon.values.astype(float), 4).tolist(),
+        "u": r(u), "v": r(v),
+        "speed_max": round(float(np.nanmax(speed)), 2),
+        "mean_speed_ms": round(float(np.hypot(u[ok].mean(), v[ok].mean())), 2),
+        "mean_dir_deg": round(float(mean_dir), 1),
+        "source": f"MERRA-2 {SHORT_NAME} 10 m wind (NASA GMAO)",
+        "resolution": "0.5 deg x 0.625 deg (~55 km), hourly mean",
+    }
+
+
 def for_fire(fire: str | FireConfig, start=None, end=None, variables=DEFAULT_VARIABLES, *,
              margin_deg: float = 2.0, method: str = "opendap") -> xr.Dataset:
     """MERRA-2 over a study fire's bbox + margin (default: the fire's data window), cached in its raw/merra2/."""

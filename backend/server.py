@@ -13,6 +13,11 @@ POST /api/predict   body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z", "ra
                     Runs the spread model (firespread.predict) on the polygon + radius_km only and returns the
                     ignition-probability cells as GeoJSON plus a summary; see spread_model/src/firespread/web.py.
                     Needs spread_model (and real_fires for NISAR) in the venv; see frontend/README.md.
+
+POST /api/wind      body: {"polygon": GeoJSON, "start": "2026-08-09T21:00Z"}
+                    MERRA-2 10 m wind (u, v on its ~55 km grid) of the hour containing "start", over the
+                    polygon + 1.5 deg, for the wind animation; see firedata.merra2.wind_grid. Needs earthaccess
+                    and the Earthdata login in real_fires/.env. 404 = MERRA-2 has no data for that time yet.
 """
 
 import json
@@ -125,6 +130,37 @@ def run_predict(body: dict) -> dict:
     return out
 
 
+WIND_MARGIN_DEG = 1.5   # wind is shown this far around the polygon (MERRA-2 cells are ~0.5 deg)
+
+
+def polygon_bbox(polygon: dict) -> tuple[float, float, float, float]:
+    """(west, south, east, north) of a GeoJSON Polygon / Feature / FeatureCollection. ValueError if malformed."""
+    try:
+        geom = polygon.get("features", [polygon])[0] if polygon.get("type") == "FeatureCollection" else polygon
+        ring = (geom.get("geometry") or geom)["coordinates"][0]
+        lons, lats = [float(p[0]) for p in ring], [float(p[1]) for p in ring]
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
+        raise ValueError(f"polygon: a GeoJSON Polygon is required ({e})") from None
+    if not ring or not (-90 <= min(lats) <= max(lats) <= 90) or not (-180 <= min(lons) <= max(lons) <= 180):
+        raise ValueError("polygon: coordinates out of range")
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def run_wind(body: dict) -> dict:
+    """POST /api/wind: MERRA-2 wind around the polygon. ValueError = bad request, LookupError = no data yet."""
+    from firedata.merra2 import wind_grid   # imported here so the other endpoints work without it
+    bbox = polygon_bbox(body.get("polygon") or {})
+    try:
+        start = pd.Timestamp(body["start"])
+    except (KeyError, ValueError, TypeError) as e:
+        raise ValueError(f"start: an ISO time in UTC is required ({e})") from None
+    t0 = time.time()
+    out = wind_grid(bbox, start, margin_deg=WIND_MARGIN_DEG)
+    print(f"wind: MERRA-2 {out['time_utc']}, {len(out['lat'])} x {len(out['lon'])} cells, mean "
+          f"{out['mean_speed_ms']:.1f} m/s from {out['mean_dir_deg']:.0f} deg ({time.time() - t0:.1f} s)", flush=True)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """A browser opening this port by mistake: point it to the website."""
@@ -139,6 +175,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(page)
 
     def do_POST(self) -> None:
+        if self.path == "/api/wind":
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                self._reply(200, run_wind(body))
+            except ValueError as e:      # bad JSON, polygon or start
+                self._reply(400, {"error": f"bad request: {e}"})
+            except LookupError as e:     # MERRA-2 not published yet for that time
+                self._reply(404, {"error": str(e), "no_data": True})
+            except Exception as e:       # Earthdata login, GES DISC down, ...
+                print(f"\nwind failed: {type(e).__name__}: {e}", flush=True)
+                self._reply(500, {"error": f"wind failed: {type(e).__name__}: {e}"})
+            return
         if self.path == "/api/predict":
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
