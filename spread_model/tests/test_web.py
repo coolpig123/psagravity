@@ -28,7 +28,7 @@ def fake_predict(seen):
 def test_parse_request_defaults_and_errors():
     req = parse_request(BODY)
     assert req == {"polygon": POLYGON, "start": "2026-08-09T21:00:00+00:00", "radius_km": 5.0, "res_m": 100.0,
-                   "steps": 30, "use_nisar": True, "burn_scars": True}
+                   "steps": 30, "use_nisar": True, "burn_scars": True, "active_front": True}
     assert parse_request({**BODY, "steps": 5})["steps"] == 5
     with pytest.raises(ValueError):
         parse_request({**BODY, "steps": 0})
@@ -47,6 +47,10 @@ def test_predict_payload_calls_predict_and_returns_map_cells():
     assert seen["polygon"] == POLYGON and seen["start"] == "2026-08-09T21:00:00+00:00"
     assert seen["radius_km"] == 3.0 and seen["res_m"] == 100.0 and seen["burn_scars"] is False
     assert callable(seen["nisar"])
+    assert seen["active_front"] is True and seen["notes"] is out["summary"]["notes"]
+    assert out["summary"]["active_front_source"] == "whole burned area"
+    assert predict_payload({**BODY, "active_front": False, "use_nisar": False},
+                           predict_fn=fake_predict(seen))["summary"]["n_cells"] > 0 and seen["active_front"] is False
 
     cells = out["cells"]["features"]
     assert 8 < len(cells) <= 48 and len(cells) == out["summary"]["n_cells"]   # beyond the first ring, within 3 steps

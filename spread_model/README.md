@@ -62,9 +62,34 @@ start time for all steps, and how many hours a step stands for is not calibrated
 ### Web app
 
 [web.py](src/firespread/web.py) turns a request from the map UI (`{polygon, start, radius_km, res_m, use_nisar,
-burn_scars, steps = 30}`) into a prediction and a JSON answer. The map gets the cells with `burn_prob > 0.01`
+burn_scars, active_front = true, steps = 30}`) into a prediction and a JSON answer. The map gets the cells with `burn_prob > 0.01`
 (from the simulation above) as GeoJSON squares, plus a summary. [backend/server.py](../backend/server.py) serves it as `POST /api/predict`; how to start the website and
 the server is in [frontend/README.md](../frontend/README.md).
+
+### Active front from VIIRS (where the fire is really burning)
+
+A polygon has cold or contained edges as well as flaming ones. [active_front.py](src/firespread/active_front.py)
+asks NASA FIRMS for the VIIRS 375 m hotspots (SNPP, NOAA-20, NOAA-21) in the 24 h before `start`, inside the grid:
+
+- **Front cells:**
+  - cells with a hotspot in or next to the polygon (hotspots far away are other fires);
+  - plus the polygon's outer-rim cells next to a hotspot, because polygons buffer hotspots by about 500 m, so they
+    often sit 1–2 cells inside. This is the same projection as `active_front()` in calibrate.py.
+- **The rest of the polygon** is burned out: it can't spread and can't re-burn.
+- **Where the front is used:**
+  - `spread_probabilities()` uses `ds["active_front"]` (or `front=`) for `ignition_prob`, the main direction and
+    the expected new cells;
+  - `simulate_spread()` starts from it.
+- **FRP:** `frp_mw` (the cell's highest fire radiative power) raises the ember launch chance on hot cells, by at
+  most ×1.5 (`spot_frp_boost`, not calibrated).
+- **Never breaks a prediction.** The whole polygon spreads, as before, when:
+  - `FIRMS_MAP_KEY` is not set in `real_fires/.env`;
+  - real_fires is not installed;
+  - FIRMS fails;
+  - no hotspot touches the fire (between satellite passes, under smoke).
+
+  `summary.notes` says why. The request flag is `"active_front": true` (default); `predict(active_front=...)` has
+  the same default as `burn_scars`.
 
 ### Burn scars from Sentinel-2 (dNBR)
 
