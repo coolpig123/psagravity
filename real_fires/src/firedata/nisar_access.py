@@ -22,7 +22,9 @@ import functools
 import hashlib
 import json
 import logging
+import os
 import re
+import threading
 import time
 import zlib
 from dataclasses import dataclass, field
@@ -157,6 +159,13 @@ def granule_url(file_id: str) -> str:
 
 READ_TIMEOUT_S = 40       # a byte-range request with no data for this long is abandoned (then retried)
 READ_ATTEMPTS = 3
+
+
+def _tmp_path(path: Path) -> Path:
+    """Where to write `path` before renaming it into place: unique per process and thread, so two readers caching
+    the same file at once (parallel workers, the threaded API server) cannot overwrite each other's half-written
+    file."""
+    return path.with_suffix(f".{os.getpid()}-{threading.get_ident()}.tmp")
 CHUNK_BATCH_SIZE = 8      # fetch missing chunks in small batches and persist each batch right away
 BATCH_ATTEMPTS = 3
 
@@ -442,7 +451,7 @@ def _meta(f_open: Callable[[], h5py.File], group: str, datasets: list[str], chun
     meta[group] = m
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        tmp = _tmp_path(path)
         tmp.write_text(json.dumps(meta))
         tmp.replace(path)
     return m
@@ -524,7 +533,7 @@ def _remote_window(url: str, group: str, datasets: list[str], grid: TargetGrid, 
                 chunks[(k, r, c)] = (mask, raw)
                 if p is not None:
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = p.with_suffix(".tmp")
+                    tmp = _tmp_path(p)
                     tmp.write_bytes(mask.to_bytes(4, "little") + raw)
                     tmp.replace(p)
 
