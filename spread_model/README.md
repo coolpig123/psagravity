@@ -89,7 +89,9 @@ shortcut). So:
 
 The continuous NISAR terms (P_den, P_dry, P_vwc) are left out of the rate because training has no NISAR data, so
 the website sees the same features as training. Along the path: cost, length, climb, descent, mean wind along it,
-mean P_veg (all with physical sign constraints), for the trees.
+mean P_veg (all with physical sign constraints), for the trees; and `barrier_dist_m`, the shortest way round the
+barriers in metres (the start-hour wind does not shape it), which the anchor line may use instead of or next to
+the path cost.
 
 **Labels**, one interval per cell, from `real_fires/data/fires/<fire>/processed/`:
 
@@ -114,7 +116,8 @@ python -m firespread.survival evaluate   # prints the report saved with the mode
 
 | Choice | Options | Chosen | Why |
 |---|---|---|---|
-| tree rounds on top of the anchor lines | 0, 100, 300 | **0** (physics curve only) | mean held-out AUC 0.836 vs 0.830 and 0.824: trees learned fire-specific corrections |
+| anchor terms | path cost, distance round barriers, both | **path cost** | mean held-out AUC 0.836 vs 0.830 and 0.829 (distance wins on Bug and Biscar, loses on Colwash) |
+| tree rounds on top of the anchor lines | 0, 100, 300 | **0** (physics curve only) | mean held-out AUC 0.836 vs 0.832 and 0.825: trees learned fire-specific corrections |
 | time likelihood | plain, right-truncated at the end of growth | **plain** | held-out timing error 1.21 vs 2.70 (ln units) |
 | sigma | maximum likelihood with the anchor line | **1.03** | the calibration sets the probability scale |
 
@@ -125,15 +128,16 @@ too slow; it is kept as an option (`TRUNCATE`) for when there are more fires.
 **Results** (2026-11-15; each training fire scored by a model fitted and calibrated on the other two; Crosswhite
 never used). AUC of P(T <= h), model / straight-line distance, and Brier score at 24 h:
 
-| Fire | 6 h | 12 h | 24 h | 48 h | Brier 24 h (raw) | arrival error if it burns |
+| Fire | 6 h | 12 h | 24 h | 48 h | Brier 24 h (raw) | arrival error as shown (uncalibrated) |
 |---|---|---|---|---|---|---|
-| Bug | 0.90 / **0.98** | 0.88 / **0.97** | 0.82 / **0.91** | 0.79 / **0.87** | 0.027 (0.062) | 4.6x |
-| Colwash | 0.84 / **0.90** | **0.76** / 0.68 | **0.75** / 0.68 | **0.76** / 0.70 | 0.007 (0.017) | 4.7x |
-| Biscar | 0.96 / **0.98** | 0.92 / **0.94** | 0.86 / **0.88** | 0.79 / 0.79 | 0.027 (0.036) | 1.7x |
-| Crosswhite | 0.98 / 0.98 | 0.98 / 0.98 | **0.97** / 0.96 | **0.95** / 0.93 | 0.009 (0.047) | 12x (too early) |
+| Bug | 0.90 / **0.98** | 0.88 / **0.97** | 0.82 / **0.91** | 0.79 / **0.87** | 0.027 (0.062) | 1.8x (4.6x) |
+| Colwash | 0.84 / **0.90** | **0.76** / 0.68 | **0.75** / 0.68 | **0.76** / 0.70 | 0.007 (0.017) | 12.7x (4.7x) |
+| Biscar | 0.96 / **0.98** | 0.92 / **0.94** | 0.86 / **0.88** | 0.79 / 0.79 | 0.027 (0.036) | 2.8x (1.7x) |
+| Crosswhite | 0.98 / 0.98 | 0.98 / 0.98 | **0.97** / 0.96 | **0.95** / 0.93 | 0.009 (0.047) | 3.4x (12.5x, too early) |
 
 The model's ranking is exactly the fastest-path cost's (it is a monotone function of it), and far better than the
-Monte Carlo CA (0.61-0.86). Arrival error = typical factor between the median and the observed interval, for cells
+Monte Carlo CA (0.61-0.86). Arrival error = typical factor between the median shown on the map (read off the
+calibrated chances, see arrival_quantiles) and the observed interval; in brackets the uncalibrated time part. For cells
 that burned.
 
 What this says:
@@ -143,8 +147,12 @@ What this says:
   so a fire unlike them is still off: on Bug, cells given 80-100% within 24 h burned 56% of the time; on Biscar,
   cells given 20-40% burned 53%.
 - Fire speed differs ~10x between these fires (Colwash: 39k acres in under a day; Crosswhite: lightning fires that
-  grew for weeks), and nothing in a drawn polygon says which kind of fire it is. That is the main limit for times:
-  Crosswhite arrives 12x later than predicted. The website shows the 25-75% range with every median.
+  grew for weeks), and nothing in a drawn polygon says which kind of fire it is. The calibration, learned on the
+  other two fires, moves the shown times toward them: better for Bug and Crosswhite, worse for Colwash and Biscar.
+  Beyond 6 h and 48 h the arrival curve is extended with the steepest of its end segment, its overall 6-48 h slope
+  and half the model's own slope, so a flat calibration step cannot give "never" or months. Fire speed is the main
+  limit for times: the shown medians are off by 1.8x (Bug) to 12.7x (Colwash), so the website shows the 25-75%
+  range with every median.
 
 Not addressed yet (data limits, not code):
 - **Fire speed.** The growth observed so far (two perimeters) would tell a fast fire from a slow one; the website
