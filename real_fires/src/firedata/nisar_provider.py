@@ -91,15 +91,24 @@ def hv_change_db(hv: np.ndarray, hv_ref: np.ndarray, smooth_cells: int = 3) -> n
 # this fire's area; interferometric coherence loss (NISAR GUNW) is the next thing to try.
 SCAR_DROP_DB = 1.5
 SCAR_SMOOTH_CELLS = 3
+# A scar is a drop relative to its surroundings. When HV fell over the whole scene since the reference pass (the
+# vegetation dried out, or the two passes are calibrated differently), an absolute threshold marks unburned land:
+# Crosswhite, A5 2026-07-20 vs 06-26: median change -1.49 dB everywhere -> 49 % of the cells "burned" (38 % of the
+# model grid), none of them inside the fire more than outside. So a scene-wide (median) drop of at least
+# SCAR_SCENE_SHIFT_DB is removed before the threshold (there: 49 % -> 4 %). Smaller shifts are left alone, so a
+# scene where the median barely moves (the Bug Fire validation above) is unchanged.
+SCAR_SCENE_SHIFT_DB = SCAR_DROP_DB / 2
 
 
 def layers_from_backscatter(hh: np.ndarray, hv: np.ndarray, hv_ref: np.ndarray | None = None,
                             scar_drop_db: float = SCAR_DROP_DB,
-                            scar_smooth_cells: int = SCAR_SMOOTH_CELLS) -> dict[str, np.ndarray]:
+                            scar_smooth_cells: int = SCAR_SMOOTH_CELLS,
+                            info: dict | None = None) -> dict[str, np.ndarray]:
     """Cover % and burned mask from HH / HV (linear power, already on the model grid).
 
     hv_ref: HV of an earlier pass of the same track; cells where the (neighbourhood-averaged) HV dropped by
-    >= scar_drop_db are burn scars. No data stays no data: cover NaN, burned -1.
+    >= scar_drop_db are burn scars. A drop of the whole scene (median <= -SCAR_SCENE_SHIFT_DB) is removed first
+    and recorded in info["scar_scene_shift_db"]. No data stays no data: cover NaN, burned -1.
     """
     nodata = ~(np.isfinite(hh) & np.isfinite(hv) & (hh > 0) & (hv > 0))
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -107,6 +116,11 @@ def layers_from_backscatter(hh: np.ndarray, hv: np.ndarray, hv_ref: np.ndarray |
     delta = None
     if hv_ref is not None:
         delta = np.where(nodata, np.nan, hv_change_db(hv, hv_ref, scar_smooth_cells))
+        shift = float(np.nanmedian(delta)) if np.isfinite(delta).any() else 0.0
+        if shift <= -SCAR_SCENE_SHIFT_DB:                     # the whole scene dropped: not fire
+            delta = delta - shift
+            if info is not None:
+                info["scar_scene_shift_db"] = round(shift, 2)
     burned, _ = compute_burned_mask(hh, hv, rvi=rvi)          # water / bare rock (nisar_layers thresholds)
     if delta is not None:                                     # burn scars, with the configured threshold
         burned = np.where(np.nan_to_num(delta, nan=0.0) <= -scar_drop_db, 1, burned)
@@ -177,7 +191,7 @@ def nisar_provider(*, lookback_days: float = 30.0, detect_scars: bool = True, sc
                 info["scar_reference"] = ref.time_utc.isoformat()
             else:
                 info["scar_reference"] = "none (no earlier same-track pass): scars not detected"
-        layers = layers_from_backscatter(hh, hv, hv_ref, scar_drop_db, scar_smooth_cells)
+        layers = layers_from_backscatter(hh, hv, hv_ref, scar_drop_db, scar_smooth_cells, info=info)
 
         sm = np.full(grid.shape, np.nan, np.float32)
         vwc = np.full(grid.shape, np.nan, np.float32)

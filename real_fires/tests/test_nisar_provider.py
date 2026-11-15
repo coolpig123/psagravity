@@ -429,6 +429,22 @@ def test_scar_change_is_averaged_over_neighbours():
     assert np.isfinite(npv.hv_change_db(hv, hv_ref, 3)).all()
 
 
+def test_scene_wide_hv_drop_is_not_a_scar():
+    """The whole scene drying by 1.6 dB since the reference (Crosswhite A5, July 2026) must not read as burned."""
+    hv_ref = np.full((9, 9), 0.02)
+    hh = np.full((9, 9), 0.1)
+    hv = hv_ref * 10 ** (-1.6 / 10)              # everything dropped 1.6 dB (>= the 1.5 dB scar threshold)
+    hv[:, 7:] *= 10 ** (-3 / 10)                 # ... and a real scar dropped 3 dB more
+    info = {}
+    burned = npv.layers_from_backscatter(hh, hv, hv_ref, info=info)["nisar_burned"]
+    assert (burned[:, :6] == 0).all() and (burned[:, 8] == 1).all()
+    assert info["scar_scene_shift_db"] == pytest.approx(-1.6, abs=0.01)
+    small = {}
+    hv2 = hv_ref * 10 ** (-0.5 / 10)             # a small scene shift is left alone (and not reported)
+    hv2[:, 7:] *= 10 ** (-1.2 / 10)              # 1.7 dB in total: still a scar by the absolute rule
+    assert (npv.layers_from_backscatter(hh, hv2, hv_ref, info=small)["nisar_burned"][:, 8] == 1).all() and not small
+
+
 def test_backfill_from_older_passes(tmp_path):
     """Newest pass sees only the east half; the west half comes from an older pass, all variables from it."""
     g = model_grid(radius_km=2.0)
