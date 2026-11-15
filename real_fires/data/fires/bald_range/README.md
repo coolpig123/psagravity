@@ -42,24 +42,43 @@ Rejected scenes:
 
 Same-track GCOV pairs (ASF): A5 07-20 → 08-13 / 08-25, A77 07-25 → 08-18 / 08-30, D71 07-25 → 08-18 / 08-30,
 D172 07-20 → 08-13 / 08-25. No NISAR acquisition between ~07-27 and 08-12 on any track. Rule unchanged from the
-Bug Fire (`nisar_provider`: HV drop ≥ 1.5 dB, 3 × 3 cells of 100 m). Only the fire window is read.
+Bug Fire calibration (HV drop ≥ 0.25 dB, 3 × 3 cells of 100 m; the provider default is still 1.5 dB). Only the fire window is read.
 
 ## Findings
 
-All scores on one 100 m grid vs the BCWS perimeter (`processed/nisar_vs_rcm_scores.csv`); AUC = how well the
-change separates inside from outside the perimeter (0.5 = none, 1 = perfect).
+All scores on one 100 m grid vs the BCWS perimeter (`processed/nisar_vs_rcm_scores.csv`). AUC = how well the
+change separates inside from outside the perimeter (0.5 = none, 1 = perfect); it does not depend on the threshold.
+NISAR threshold = **0.25 dB HV drop, calibrated on the Bug Fire only** (best mean IoU over 3 same-track pairs,
+`../bug_fire/processed/nisar_threshold_calibration.csv`, issue #7) and applied here unchanged.
 
-- **RCM C-band RL rise ≥ 1 dB:** 08-10 (2 d after ignition) cover 29 %, precision 48 %, IoU 22 %, AUC 0.62;
-  08-22 (14 d) cover 43 %, precision 51 %, IoU 30 %, AUC 0.67. False alarms outside are high (16–22 %).
-- **NISAR L-band, existing HV-drop rule (≥ 1.5 dB):** almost nothing detected (cover 0–1.6 %, precision 96–100 %
-  where anything is found). AUC of the drop is 0.53–0.69 on the 6 usable pairs; the change is real but mostly
-  below 1.5 dB. Track A5 returned no valid pixels over the perimeter (0 %).
-- **Opposite response holds in direction, weakly:** inside the perimeter L-band HV tends to drop and C-band RL
-  tends to rise (both AUC > 0.5 on every usable pair), visible as red vs blue patches in `figures/nisar_vs_rcm.png`.
-  The magnitudes are small (C-band median rise +0.5 to +0.8 dB vs. +3–6 dB reported for wet boreal scars).
-- **Combination does not beat RCM alone:** NISAR OR RCM = RCM's numbers +0.0–0.9 IoU points (NISAR adds < 2 % of
-  area); NISAR AND RCM keeps precision 100 % but cover ≤ 0.8 %. With the NISAR rule unchanged, NISAR adds nothing.
-- RCM gives a usable during-fire map 2 days after ignition, when NISAR had no pass (gap ~07-27 to 08-12).
+| Sensor / rule | Pair | Days after ignition | Cover % | Precision % | IoU % | AUC |
+|---|---|---|---|---|---|---|
+| RCM RL rise ≥ 1 dB | SC30MCPA 08-02 → 08-10 | 2.1 | 29.2 | 47.9 | 22.2 | 0.62 |
+| RCM RL rise ≥ 1 dB | SC30MCPA 08-02 → 08-22 | 14.1 | 43.3 | 50.8 | 30.5 | 0.67 |
+| NISAR HV drop ≥ 0.25 dB | D172 07-20 → 08-13 | 5.2 | 18.1 | 93.8 | 17.9 | 0.55 |
+| NISAR HV drop ≥ 0.25 dB | D71 07-25 → 08-18 | 10.2 | 22.1 | 98.6 | 22.1 | 0.69 |
+| NISAR HV drop ≥ 0.25 dB | A77 07-25 → 08-18 | 10.6 | 27.3 | 89.4 | 26.4 | 0.63 |
+| NISAR HV drop ≥ 0.25 dB | D172 07-20 → 08-25 | 17.2 | 30.5 | 92.1 | 29.7 | 0.68 |
+| NISAR HV drop ≥ 0.25 dB | D71 07-25 → 08-30 | 22.2 | 0.7 | 98.9 | 0.7 | 0.53 |
+| NISAR HV drop ≥ 0.25 dB | A77 07-25 → 08-30 | 22.6 | 3.9 | 88.8 | 3.9 | 0.53 |
+| NISAR OR RCM | D172 08-25 + RCM 08-22 | 17.2 | 59.1 | 57.1 | **40.9** | – |
+| NISAR OR RCM | D71 08-18 + RCM 08-22 | 10.2 | 55.3 | 56.7 | 38.9 | – |
+| NISAR OR RCM | A77 08-18 + RCM 08-22 | 10.6 | 57.5 | 56.3 | 39.8 | – |
+| NISAR OR RCM (during fire) | D172 08-13 + RCM 08-10 | 5.2 | 40.0 | 55.0 | 30.1 | – |
+| NISAR AND RCM | D172 08-25 + RCM 08-22 | 17.2 | 15.2 | 97.5 | 15.2 | – |
+
+- **NISAR alone** (Bug-calibrated 0.25 dB): high precision (89–99 %), cover 18–31 % on the 08-13 to 08-25 pairs.
+  The 08-30 pairs nearly vanish (AUC 0.53) for reasons not yet understood (possibly a wet or windy acquisition).
+  Track A5 returned no valid pixels over the perimeter. With the old 1.5 dB rule NISAR found ≤ 1.6 % (previous run).
+- **RCM alone:** cover 29–43 %, but precision ~50 % and 16–22 % false alarms outside the perimeter.
+- **Opposite response holds in direction, weakly:** L-band HV drops and C-band RL rises inside the perimeter
+  (AUC > 0.5 on every usable pair; red vs blue in `figures/nisar_vs_rcm.png`); C-band median rise is only
+  +0.5 to +0.8 dB, far below the +3–6 dB reported for wet boreal scars.
+- **NISAR OR RCM beats each alone:** IoU 38.9–40.9 % vs 30.5 % (RCM 08-22) and 22–30 % (NISAR), i.e. +8 to +10
+  IoU points over RCM alone, mostly from cover (55–59 %); precision stays ~57 %, limited by RCM's false alarms.
+  During the fire (08-13 + 08-10): 30.1 % vs 22.2 % RCM alone. NISAR AND RCM is very precise (95–99 %) but finds
+  only 8–15 % of the area.
+- RCM gives a during-fire map 2 days after ignition, when NISAR had no pass (gap ~07-27 to 08-12).
 
 Outputs: `processed/rcm_burned_scores.csv`, `rcm_change_diagnostics.csv`, `rcm_growth_persistent.csv`,
 `nisar_vs_rcm_scores.csv`; figures `figures/rcm_burned_area_growth.png`, `figures/nisar_vs_rcm.png`.
@@ -75,3 +94,6 @@ Outputs: `processed/rcm_burned_scores.csv`, `rcm_change_diagnostics.csv`, `rcm_g
    detection (pipeline not run).
 4. **Sources for +5–6 dB (RADARSAT-1).** The figure in the brief could not be confirmed; the README quotes the
    abstract ranges (+3–6 / 3–8 dB, ERS-1 / ERS + RADARSAT) instead.
+5. **NISAR threshold at the edge of the grid.** 0.25 dB was the lowest value tested on the Bug Fire and still the
+   best mean IoU, so an even lower threshold might score higher; not tested. `nisar_provider.SCAR_DROP_DB` (1.5 dB,
+   used for the spread-model inputs) was left unchanged; changing it is a separate decision.

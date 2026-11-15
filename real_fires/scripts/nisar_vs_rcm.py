@@ -1,7 +1,8 @@
 """NISAR L-band vs RCM C-band burned area on the Bald Range fire, both scored against the BCWS perimeter.
 
-NISAR: same-track GCOV pairs, existing burn-scar rule unchanged (nisar_provider: HV drop >= SCAR_DROP_DB
-after SCAR_SMOOTH_CELLS x SCAR_SMOOTH_CELLS averaging at 100 m). Only the fire window is read from ASF.
+NISAR: same-track GCOV pairs, HV drop >= NISAR_DROP_DB after SCAR_SMOOTH_CELLS x SCAR_SMOOTH_CELLS averaging
+at 100 m. NISAR_DROP_DB is calibrated on the Bug Fire (scripts/nisar_threshold_calibration.py, issue #7) and
+used here unchanged: no tuning on Bald Range. Only the fire window is read from ASF.
 RCM: SC30MCPA RL rise >= RISE_DB (scripts/rcm_burned_area.py), sampled onto the same 100 m grid
 (cell centre of each 5 x 5 block of the 20 m grid; the RCM change is already a 5 x 5 mean).
 Combinations: NISAR drop OR / AND RCM rise, pairing each NISAR date with the nearest RCM date.
@@ -26,11 +27,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rcm_burned_area as R                                   # noqa: E402  (same folder)
 from firedata import bcws, rcm                                # noqa: E402
 from firedata.nisar_access import GCOV_GROUP, TargetGrid, group_passes, read_pass, search_granules  # noqa: E402
-from firedata.nisar_provider import SCAR_DROP_DB, SCAR_SMOOTH_CELLS, _gcov_valid, hv_change_db  # noqa: E402
+from firedata.config import REPO_ROOT  # noqa: E402
+from firedata.nisar_provider import SCAR_SMOOTH_CELLS, _gcov_valid, hv_change_db  # noqa: E402
 
 # Same-track pairs (ASF search, 2026): track -> (reference, [later passes]); ignition 08-07 23:20 UTC.
 PAIRS = {"A5": ("07-20", ["08-13", "08-25"]), "A77": ("07-25", ["08-18", "08-30"]),
          "D71": ("07-25", ["08-18", "08-30"]), "D172": ("07-20", ["08-13", "08-25"])}
+import json  # noqa: E402
+NISAR_DROP_DB = json.loads((REPO_ROOT / "data/fires/bug_fire/processed/nisar_threshold_calibration.json")
+                           .read_text())["chosen_drop_db"]
 CELL = 5                                   # 5 x 20 m = 100 m
 
 
@@ -64,7 +69,7 @@ def main():
         rcm_d[R.when(frames[0])] = d[CELL // 2::CELL, CELL // 2::CELL][:ny, :nx]
 
     # --- NISAR same-track pairs
-    bbox = tuple(fire.buffer(0.05).total_bounds)
+    bbox = tuple(f.buffer(5000).to_crs(4326).total_bounds)
     passes = group_passes(search_granules("GCOV", bbox, "2026-07-15", "2026-09-05"))
     def find(track, mmdd):
         hits = [q for q in passes if q.track_id == track and f"{q.time_utc:%m-%d}" == mmdd]
@@ -92,7 +97,7 @@ def main():
             R.auc_rise(d[W & v], d[ref_out & v]))
     for (track, ref, t), d in nisar_d.items():
         v = np.isfinite(d)
-        nb = np.nan_to_num(d) <= -SCAR_DROP_DB
+        nb = np.nan_to_num(d) <= -NISAR_DROP_DB
         add("NISAR L-band HV drop", f"{track} {ref} → {t:%m-%d}", t, nb, v, R.auc_rise(-d[W & v], -d[ref_out & v]))
         tr = min(rcm_d, key=lambda u: abs(u - t))
         r = rcm_d[tr]
@@ -116,7 +121,7 @@ def main():
     fig, ax = plt.subplots(1, 3, figsize=(17, 5.8), constrained_layout=True)
     im0 = ax[0].imshow(nisar_d[key], cmap="RdBu", vmin=-4, vmax=4, extent=ext)
     ax[0].set_title(f"NISAR L-band HV change, {best.pair} ({best.days_after_ignition:.0f} d after ignition)\n"
-                    f"rule: drop ≥ {SCAR_DROP_DB} dB · cover {best.cover_pct:.0f}% · precision {best.precision_pct:.0f}% · "
+                    f"rule: drop ≥ {NISAR_DROP_DB} dB (Bug-calibrated) · cover {best.cover_pct:.0f}% · precision {best.precision_pct:.0f}% · "
                     f"IoU {best.iou_pct:.0f}% · AUC(drop) {best.auc:.2f}", fontsize=9)
     ax[1].imshow(rcm_d[tr_], cmap="RdBu", vmin=-4, vmax=4, extent=ext)
     ax[1].set_title(f"RCM C-band RL change, {rc.pair} ({rc.days_after_ignition:.0f} d after ignition)\n"
