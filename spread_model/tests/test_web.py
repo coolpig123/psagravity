@@ -145,3 +145,38 @@ def test_nisar_attrs_reach_the_result():
     res = predict(inputs=ds, nisar=nisar)
     assert res.attrs["nisar_passes_used"] == "2026-08-04 A34" and res.attrs["nisar_coverage_pct"] == 100.0
     assert "other" not in res.attrs and "nisar_alignment" in res.attrs
+
+
+def test_parse_request_and_payload_with_meteomatics_and_timeline():
+    import xarray as xr
+
+    req = parse_request({**BODY, "weather_source": "meteomatics", "hours": 12})
+    assert req["weather_source"] == "meteomatics" and req["hours"] == 12.0
+    with pytest.raises(ValueError, match="weather_source"):
+        parse_request({**BODY, "weather_source": "invalid_source"})
+
+    seen = {}
+
+    def fake_forecast_predict(**kw):
+        seen.update(kw)
+        ds0 = make_ds(u=4.0, v=0.0, temp=29.0, rh=22.0)
+        ds1 = make_ds(u=2.0, v=5.0, temp=26.0, rh=30.0).assign_coords(
+            time=np.array(["2026-08-09T22:00"], dtype="datetime64[ns]")
+        )
+        ds = xr.concat([ds0, ds1], dim="time", data_vars="minimal")
+        ds.attrs.update({"weather_source": "meteomatics", "weather_dataset": "Meteomatics API (mix)"})
+        return spread_probabilities(ds)
+
+    out = predict_payload(
+        {**BODY, "weather_source": "meteomatics", "hours": 12, "use_nisar": False, "steps": 6},
+        predict_fn=fake_forecast_predict,
+    )
+    assert seen["weather_source"] == "meteomatics" and seen["hours"] == 12.0
+    summary = out["summary"]
+    assert summary["weather_source"] == "meteomatics"
+    assert summary["sim_time_developing"] == 1
+    assert summary["sim_weather_steps"] == 2
+    assert len(summary["weather_timeline"]) == 2
+    assert summary["weather_timeline"][0]["wind_speed_ms"] == pytest.approx(4.0)
+    json.dumps(out, allow_nan=False)
+

@@ -13,8 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-import ee
 import pandas as pd
+
+from ._ee_compat import ee
 
 # name -> (units, description). The one place that defines the output contract.
 VARIABLES: dict[str, tuple[str, str]] = {
@@ -50,9 +51,10 @@ VARIABLES: dict[str, tuple[str, str]] = {
     "wind_v_ms": ("m/s", "10 m wind, northward component (toward north > 0)"),
     "wind_speed_ms": ("m/s", "10 m wind speed (derived from u, v)"),
     "wind_dir_deg": ("degrees", "10 m wind direction the wind blows FROM, clockwise from north (derived)"),
-    "gust_ms": ("m/s", "Wind gust (rtma, gfs)"),
+    "gust_ms": ("m/s", "Wind gust (rtma, gfs, meteomatics)"),
     "precip_mm": ("mm", "Precipitation in the hour (gfs: instantaneous rate x 1 h)"),
-    "soil_moisture": ("m3/m3", "Volumetric soil water, 0-7 cm (era5_land only)"),
+    "soil_moisture": ("m3/m3", "Volumetric soil water / surface soil moisture index (era5_land, meteomatics)"),
+    "fosberg_fwi": ("1", "Fosberg Fire Weather Index (0-100, meteomatics)"),
     # initial fire state
     "initial_burned": ("class", "Initial fire mask at start time: 1 = burning/burned, 0 = unburned"),
 }
@@ -226,6 +228,10 @@ def _gfs(region, start, end, issued=None):
             .map(std)), {"gfs_issued_utc": pd.Timestamp(run_ms, unit="ms", tz="UTC").isoformat()}
 
 
+def _meteomatics_placeholder(region, start, end, issued=None):
+    raise LookupError("meteomatics is fetched directly via geelayers.meteomatics.fetch_meteomatics_weather")
+
+
 WEATHER: dict[str, WeatherSource] = {w.name: w for w in [
     WeatherSource("rtma", "NOAA Real-Time Mesoscale Analysis: hourly observed-weather analysis", "NOAA/NWS/RTMA",
                   "CONUS", 2500, ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "gust_ms", "precip_mm"), _rtma),
@@ -234,4 +240,8 @@ WEATHER: dict[str, WeatherSource] = {w.name: w for w in [
                   ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "precip_mm", "soil_moisture"), _era5_land),
     WeatherSource("gfs", "NOAA GFS 0.25 deg forecast: future weather for live predictions", "NOAA/GFS0P25",
                   "global", 27800, ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "gust_ms", "precip_mm"), _gfs),
+    WeatherSource("meteomatics", "Meteomatics API: 1 km historical, real-time and forecast weather (EURO1k/US1k/global)",
+                  "Meteomatics API (mix)", "global", 1000,
+                  ("temp_c", "rh_pct", "wind_u_ms", "wind_v_ms", "gust_ms", "precip_mm", "soil_moisture", "fosberg_fwi"),
+                  _meteomatics_placeholder),
 ]}

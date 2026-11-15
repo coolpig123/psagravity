@@ -376,3 +376,65 @@ class _FakeImg:
     def select(self, bands):
         return self
 
+
+def test_meteomatics_weather_parsing_and_license_fallback(monkeypatch):
+    from geelayers import api, meteomatics
+
+    g = Grid.from_point(*BUG, radius_km=2, res_m=500)
+    w, s, e, n = g.bbox_lonlat()
+    lats = [round(s, 4), round(n, 4)]
+    lons = [round(w, 4), round(e, 4)]
+    dates = ["2026-08-09T21:00:00Z", "2026-08-09T22:00:00Z"]
+
+    def make_coords(val_t0, val_t1):
+        return [
+            {"lat": lat, "lon": lon, "dates": [{"date": dates[0], "value": val_t0}, {"date": dates[1], "value": val_t1}]}
+            for lat in lats for lon in lons
+        ]
+
+    fake_json = {
+        "data": [
+            {"parameter": "wind_speed_u_10m:ms", "coordinates": make_coords(4.0, 0.0)},
+            {"parameter": "wind_speed_v_10m:ms", "coordinates": make_coords(0.0, 6.0)},
+            {"parameter": "t_2m:C", "coordinates": make_coords(31.0, 27.0)},
+            {"parameter": "relative_humidity_2m:p", "coordinates": make_coords(18.0, 35.0)},
+            {"parameter": "wind_gusts_10m_1h:ms", "coordinates": make_coords(7.5, 9.0)},
+            {"parameter": "precip_1h:mm", "coordinates": make_coords(0.0, 1.2)},
+        ]
+    }
+
+    calls = []
+
+    class _FakeResp:
+        def __init__(self, status_code, payload, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, auth=None, timeout=None):
+        calls.append((url, auth))
+        if "fosberg_fire_weather_index" in url:
+            return _FakeResp(400, {}, "parameter fosberg_fire_weather_index:idx not available in Basic")
+        return _FakeResp(200, fake_json)
+
+    monkeypatch.setenv("METEOMATICS_USERNAME", "demo_user")
+    monkeypatch.setenv("METEOMATICS_PASSWORD", "demo_pass")
+    monkeypatch.setattr(meteomatics.requests, "get", fake_get)
+
+    wx = api.get_weather(g, "2026-08-09T21:00Z", "2026-08-09T23:00Z", source="meteomatics")
+    assert len(calls) == 2  # first tried extended, fell back to standard on HTTP 400
+    assert calls[0][1] == ("demo_user", "demo_pass")
+    assert wx.attrs["weather_source"] == "meteomatics"
+    assert set(wx.dims) == {"time", "y", "x"}
+    assert wx.sizes["time"] == 2 and wx.sizes["y"] == g.height and wx.sizes["x"] == g.width
+    assert np.allclose(wx["wind_speed_ms"].isel(time=0).values, 4.0, atol=1e-4)
+    assert np.allclose(wx["wind_dir_deg"].isel(time=0).values, 270.0, atol=1e-3)
+    assert np.allclose(wx["wind_speed_ms"].isel(time=1).values, 6.0, atol=1e-4)
+    assert np.allclose(wx["wind_dir_deg"].isel(time=1).values, 180.0, atol=1e-3)
+    assert np.allclose(wx["temp_c"].isel(time=0).values, 31.0, atol=1e-4)
+    assert np.allclose(wx["precip_mm"].isel(time=1).values, 1.2, atol=1e-4)
+
+

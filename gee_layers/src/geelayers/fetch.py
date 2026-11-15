@@ -9,9 +9,9 @@ import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import ee
 import numpy as np
 
+from ._ee_compat import ee
 from .grid import Grid
 
 NODATA = -9999.0              # what masked pixels are filled with before download; becomes NaN
