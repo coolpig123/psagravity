@@ -97,3 +97,30 @@ Outputs: `processed/rcm_burned_scores.csv`, `rcm_change_diagnostics.csv`, `rcm_g
 5. **NISAR threshold at the edge of the grid.** 0.25 dB was the lowest value tested on the Bug Fire and still the
    best mean IoU, so an even lower threshold might score higher; not tested. `nisar_provider.SCAR_DROP_DB` (1.5 dB,
    used for the spread-model inputs) was left unchanged; changing it is a separate decision.
+
+## Radar fire state as the spread model's start (`firedata/fire_state.py`, `scripts/fire_state_demo.py`)
+
+`fire_state(fire, time)` → burned-area polygon from the latest RCM (RL rise ≥ 1 dB) and / or NISAR (HV drop
+≥ 0.25 dB) scene before `time` (sensors within 4 days OR-ed). It drops specks < 5 ha, fills holes < 5 ha and keeps
+the largest clump reaching within 2 km of the ignition. The window is ignition ± 15 km; the BCWS perimeter is
+not used. Demo: start = RCM 08-10 01:34 (2 days after ignition, before any NISAR pass), **3,378 ha**, which is
+less than the ~9,500 ha reported on 08-08 local time, so the state under-maps. Model = `firespread.predict` + `simulate_spread`,
+Bug-calibrated hindcast parameters held fixed (2 h per step, burn_prob ≥ 0.9). New-area scores
+(`processed/fire_state_demo_scores.csv`):
+
+| Target | Model IoU / precision / recall | Same-area circle IoU |
+|---|---|---|
+| FEDS 08-11 00:00 (+22 h) | 0.61 / 0.94 / 0.63 | 0.54 |
+| FEDS 08-12 00:00 (+46 h) | 0.70 / 0.85 / 0.80 | 0.61 |
+| FEDS 08-14 00:00 (+94 h) | 0.61 / 0.65 / 0.91 | 0.57 |
+| Radar state 08-22 (12 d) | 0.10 / 0.10 / 0.93 | 0.11 |
+| BCWS final 08-29 (19 d) | 0.18 / 0.18 / 0.97 | 0.18 |
+
+The model beats the circle by +4 to +9 IoU points up to ~4 days. After that it burns most of the 15 km window
+(85,000–122,000 ha new vs 9,600–22,000 ha observed) and is no better than the circle. FEDS is a single NRT
+fireid (11710) and the scores are from one fire, so treat them as a demo. Figure: `figures/fire_state_demo.png`.
+
+**Suggestions for spread_model (not changed here):** the over-prediction at long horizons comes from fixed
+start-hour weather and no burnout / suppression. Possible fixes: (1) hourly weather inside `simulate_spread`
+(the inputs already hold 26 h); (2) a per-step extinction or a cap on CA steps per day for night-time and
+suppression; (3) accept a radar fire state (polygon plus scene list) as a `predict` input next to FEDS.
