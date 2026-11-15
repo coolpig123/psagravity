@@ -1,0 +1,93 @@
+{
+ "fire": "Bald Range (BCWS K51490)",
+ "official_ha": 25163.2,
+ "beam": "SC30MCPA",
+ "reference_scenes": [
+  "RCM1_OK4114697_PK4293771_1_SC30MCPA_20260802_013425_CH_CV_MLC"
+ ],
+ "post_scenes": [
+  [
+   "RCM3_OK4114697_PK4308170_1_SC30MCPA_20260810_013442_CH_CV_MLC"
+  ],
+  [
+   "RCM3_OK4114697_PK4329615_1_SC30MCPA_20260822_013440_CH_CV_MLC"
+  ]
+ ],
+ "rule": "RL rise >= 1.0 dB, 5x5 px (100 m)",
+ "per_date": [
+  {
+   "date": "2026-08-10 01:34",
+   "hours_after_ignition": 50.2,
+   "rise_db": 1.0,
+   "detected_ha": 11901.5,
+   "detected_inside_ha": 5958.6,
+   "cover_pct": 26.8,
+   "precision_pct": 50.1,
+   "iou_pct": 21.1,
+   "false_alarm_pct": 13.76,
+   "valid_in_perimeter_pct": 88.5
+  },
+  {
+   "date": "2026-08-22 01:34",
+   "hours_after_ignition": 338.2,
+   "rise_db": 1.0,
+   "detected_ha": 17612.9,
+   "detected_inside_ha": 9123.3,
+   "cover_pct": 40.9,
+   "precision_pct": 51.8,
+   "iou_pct": 29.6,
+   "false_alarm_pct": 19.62,
+   "valid_in_perimeter_pct": 88.7
+  }
+ ],
+ "persistent_growth": [
+  {
+   "date": "2026-08-10",
+   "detected_ha": 7988.4,
+   "detected_inside_ha": 4614.5,
+   "cover_pct": 20.8,
+   "precision_pct": 57.8,
+   "iou_pct": 18.1,
+   "false_alarm_pct": 7.83,
+   "valid_in_perimeter_pct": 88.1
+  },
+  {
+   "date": "2026-08-22",
+   "detected_ha": 17420.5,
+   "detected_inside_ha": 9026.4,
+   "cover_pct": 40.7,
+   "precision_pct": 51.8,
+   "iou_pct": 29.5,
+   "false_alarm_pct": 19.49,
+   "valid_in_perimeter_pct": 88.1
+  }
+ ],
+ "diagnostics": [
+  {
+   "date": "2026-08-10",
+   "raw_RL_offset_outside_db": 0.39,
+   "median_dRL_in_db": 0.48,
+   "median_dRR_in_db": -0.01,
+   "median_dRLRR_in_db": 0.54,
+   "median_dRL_out_db": 0.16,
+   "median_dRR_out_db": 0.04,
+   "median_dRLRR_out_db": 0.11,
+   "auc_rise_dRL": 0.631,
+   "auc_rise_dRR": 0.472,
+   "auc_rise_dRLRR": 0.634
+  },
+  {
+   "date": "2026-08-22",
+   "raw_RL_offset_outside_db": 0.45,
+   "median_dRL_in_db": 0.79,
+   "median_dRR_in_db": -0.14,
+   "median_dRLRR_in_db": 1.02,
+   "median_dRL_out_db": 0.28,
+   "median_dRR_out_db": 0.04,
+   "median_dRLRR_out_db": 0.23,
+   "auc_rise_dRL": 0.673,
+   "auc_rise_dRR": 0.422,
+   "auc_rise_dRLRR": 0.704
+  }
+ ]
+}
