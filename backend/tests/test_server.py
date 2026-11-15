@@ -73,20 +73,19 @@ def test_predict_endpoint_errors(post):
     assert status == 404
 
 
-SQUARE = {"type": "Polygon", "coordinates": [[[-120.1, 39.7], [-120.0, 39.7], [-120.0, 39.8], [-120.1, 39.7]]]}
 
-
-def test_polygon_bbox():
-    assert server.polygon_bbox(SQUARE) == (-120.1, 39.7, -120.0, 39.8)
-    feature = {"type": "Feature", "properties": {}, "geometry": SQUARE}
-    assert server.polygon_bbox({"type": "FeatureCollection", "features": [feature]}) == (-120.1, 39.7, -120.0, 39.8)
-    for bad in ({}, {"type": "Polygon", "coordinates": [[]]}, {"coordinates": [[[500, 0]]]}):
+def test_wind_view_bbox():
+    # snapped out to 5 deg tiles, so small pans and zooms reuse the same data
+    assert server.wind_view_bbox([-120.3, 39.5, -119.8, 39.9]) == (-125.0, 35.0, -115.0, 40.0)
+    assert server.wind_view_bbox([-121, 37, -118, 41]) == (-125.0, 35.0, -115.0, 45.0)
+    assert server.wind_view_bbox([-190, -95, -170, -80]) == (-180.0, -90.0, -170.0, -80.0)   # clamped to the world
+    for bad in (None, [1, 2, 3], ["a", 0, 1, 1], [10, 0, -10, 1], [-150, 0, -100, 10]):     # last: too wide
         with pytest.raises(ValueError):
-            server.polygon_bbox(bad)
+            server.wind_view_bbox(bad)
 
 
 def test_wind_endpoint(post, monkeypatch):
-    """/api/wind passes the polygon's box and the start time to firedata.merra2.wind_grid (mocked)."""
+    """/api/wind reads the map view (snapped to tiles) at the start time via firedata.merra2.wind_grid (mocked)."""
     merra2 = pytest.importorskip("firedata.merra2")
     seen = []
 
@@ -98,12 +97,13 @@ def test_wind_endpoint(post, monkeypatch):
                 "u": [[1, 1], [1, 1]], "v": [[0, 0], [0, 0]], "mean_speed_ms": 1.0, "mean_dir_deg": 270.0}
     monkeypatch.setattr(merra2, "wind_grid", fake_wind_grid)
 
-    status, out = post("/api/wind", {"polygon": SQUARE, "start": "2026-08-09T21:00Z"})
-    assert status == 200 and out["mean_dir_deg"] == 270.0
-    assert seen == [((-120.1, 39.7, -120.0, 39.8), "2026-08-09 21:00:00+00:00", server.WIND_MARGIN_DEG)]
-    status, out = post("/api/wind", {"polygon": SQUARE, "start": "2030-01-01T00:00Z"})
+    view = [-120.3, 39.5, -119.8, 39.9]
+    status, out = post("/api/wind", {"bbox": view, "start": "2026-08-09T21:00Z"})
+    assert status == 200 and out["mean_dir_deg"] == 270.0 and out["bbox"] == [-125.0, 35.0, -115.0, 40.0]
+    assert seen == [((-125.0, 35.0, -115.0, 40.0), "2026-08-09 21:00:00+00:00", server.WIND_EDGE_DEG)]
+    status, out = post("/api/wind", {"bbox": view, "start": "2030-01-01T00:00Z"})
     assert status == 404 and out["no_data"] is True
-    status, out = post("/api/wind", {"polygon": SQUARE})
+    status, out = post("/api/wind", {"bbox": view})
     assert status == 400 and "start" in out["error"]
     status, out = post("/api/wind", {"start": "2026-08-09T21:00Z"})
-    assert status == 400 and "polygon" in out["error"]
+    assert status == 400 and "bbox" in out["error"]

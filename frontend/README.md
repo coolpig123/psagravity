@@ -35,13 +35,15 @@ Stop with `Ctrl+C`. `npm run dev:web` runs the website alone; `python backend\se
 
 ## Wind
 
-After **Finish**, the map shows the wind around the polygon (about 1.5° on each side) at the **Start (UTC)** time,
-in the style of [earth.nullschool.net](https://earth.nullschool.net): colours = wind speed (0-20 m/s scale next to
-the toggle), moving white lines = particles carried by the wind. The **wind** checkbox (right of the regions
-checkbox) turns it off and on; changing the start time reloads it. Hover the label for the exact hour and source.
+After **Finish**, the whole map is covered with the wind at the **Start (UTC)** time, in the style of
+[earth.nullschool.net](https://earth.nullschool.net): colours = wind speed (0-20 m/s scale next to the toggle),
+moving white lines = particles carried by the wind. Pan or zoom and the wind follows the view (new data only when the
+view leaves the area already loaded, which is widened to 5° tiles). Zoomed far out, only a 30° x 20° area around the
+polygon gets wind, to keep downloads small. The **wind** checkbox (right of the regions checkbox) turns it off and
+on; changing the start time reloads it. The label gives the wind at the polygon; hover it for the hour and source.
 
 The data is NASA **MERRA-2** 10 m wind (hourly means, ~55 km grid), read by the server (`POST /api/wind`,
-[firedata.merra2](../real_fires/src/firedata/merra2.py)) from GES DISC: only the box around the polygon, a few
+[firedata.merra2](../real_fires/src/firedata/merra2.py)) from GES DISC: only the area on screen, a few
 seconds the first time and instant after (cached in `real_fires/data/merra2_cache/raw`). It needs `earthaccess` in the
 server's venv (the `real_fires\requirements.txt` install above) and your Earthdata login in `real_fires\.env`, with the
 application "NASA GESDISC DATA ARCHIVE" approved once in your Earthdata profile. MERRA-2 is published 2-6 weeks

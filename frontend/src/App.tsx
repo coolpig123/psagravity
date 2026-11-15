@@ -3,7 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { Check, Download, Flame, Pencil, Ruler, Trash2, Undo2 } from 'lucide-react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
-import { legendGradient, LEGEND_MAX_MS, WindLayer, type WindGrid } from './wind'
+import { covers, legendGradient, LEGEND_MAX_MS, sampleWind, viewBox, WindLayer, type WindGrid } from './wind'
 
 type Point = [number, number] // [lng, lat]
 type Mode = 'idle' | 'drawing' | 'locked'
@@ -161,6 +161,8 @@ function App() {
   const [wind, setWind] = useState<WindGrid | null>(null)
   const [windStatus, setWindStatus] = useState<WindStatus>({ state: 'idle' })
   const windRequest = useRef(0) // same as requestId, for the wind
+  const windShown = useRef<{ grid: WindGrid; start: string } | null>(null) // the wind on the map and its start time
+  const [viewTick, setViewTick] = useState(0) // +1 after each pan / zoom, so the wind can follow the view
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -251,6 +253,7 @@ function App() {
       )
       // Wind animation: speed colours under the prediction, particles on a canvas above the map.
       windLayer.current = new WindLayer(map, container.current!.parentElement!, 'prediction-fill')
+      map.on('moveend', () => setViewTick((t) => t + 1))
       setLoaded(true)
     })
 
@@ -340,23 +343,36 @@ function App() {
     }
   }, [prediction, loaded])
 
-  // Once the polygon is finished, fetch the MERRA-2 wind around it for the start time (again when the start
-  // time changes, after a short pause in typing). Drawing again or clearing removes it.
+  // Once the polygon is finished, fetch the MERRA-2 wind over the whole visible map for the start time (zoomed far
+  // out: a 30 x 20 deg area around the polygon). After a
+  // pan or zoom, fetch again only if the view leaves the area already loaded (the old wind stays meanwhile);
+  // a new start time always fetches again. Drawing again or clearing removes it.
   useEffect(() => {
-    const id = ++windRequest.current
+    const map = mapRef.current
     const t = start.trim()
-    if (mode !== 'locked' || points.length < 3 || !t) {
+    if (mode !== 'locked' || !t || !map || !loaded) {
+      windRequest.current++
+      windShown.current = null
       setWind(null)
       setWindStatus({ state: 'idle' })
       return
     }
-    setWindStatus({ state: 'loading' })
+    const pts = pointsRef.current
+    const middle: [number, number] = [
+      pts.reduce((a, q) => a + q[0], 0) / pts.length,
+      pts.reduce((a, q) => a + q[1], 0) / pts.length,
+    ]
+    const box = viewBox(map, middle)
+    const shown = windShown.current
+    if (shown && shown.start === t && covers(shown.grid, box)) return
+    const id = ++windRequest.current
+    if (!shown || shown.start !== t) setWindStatus({ state: 'loading' })
     const timer = setTimeout(async () => {
       try {
         const res = await fetch('/api/wind', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ polygon: toGeoJSON(points, 'locked'), start: t }),
+          body: JSON.stringify({ bbox: box, start: t }),
         })
         if (res.status === 503) throw new Error('the Python server is not running (npm run dev)')
         const data = await res.json().catch(() => null)
@@ -365,16 +381,18 @@ function App() {
         if (res.status === 404) throw new Error('the Python server is older than the website: restart npm run dev')
         if (!res.ok) throw new Error(data?.error ?? `the server answered ${res.status}`)
         if (id !== windRequest.current) return
+        windShown.current = { grid: data as WindGrid, start: t }
         setWind(data as WindGrid)
         setWindStatus({ state: 'ok' })
       } catch (err) {
         if (id !== windRequest.current) return
+        windShown.current = null
         setWind(null)
         setWindStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
       }
     }, 400)
     return () => clearTimeout(timer)
-  }, [mode, points, start])
+  }, [mode, start, viewTick, loaded])
 
   useEffect(() => {
     windLayer.current?.setData(wind)
@@ -412,6 +430,17 @@ function App() {
   }
 
   const area = areaKm2(points)
+
+  // Wind at the middle of the polygon for the label (the grid mean if the polygon is outside the loaded area).
+  const windHere = (() => {
+    if (!wind || points.length === 0) return null
+    const lng = points.reduce((a, p) => a + p[0], 0) / points.length
+    const lat = points.reduce((a, p) => a + p[1], 0) / points.length
+    const uv = sampleWind(wind, lng, lat)
+    if (!uv) return { speed: wind.mean_speed_ms, dir: wind.mean_dir_deg, where: 'mean of the loaded area' }
+    const dir = (((Math.atan2(-uv[0], -uv[1]) * 180) / Math.PI) + 360) % 360 // direction the wind comes from
+    return { speed: Math.hypot(uv[0], uv[1]), dir, where: 'at the polygon' }
+  })()
 
   // One-line hint for the next step, shown under the toolbar.
   const hint =
@@ -517,11 +546,11 @@ ${err instanceof Error ? err.message : err}`)
             <input type="checkbox" checked={showWind} onChange={(e) => setShowWind(e.target.checked)} />
             {windStatus.state === 'loading' && 'wind (loading MERRA-2…)'}
             {windStatus.state === 'error' && <span className="wind-error">wind: {windStatus.message}</span>}
-            {windStatus.state === 'ok' && wind && (
+            {windStatus.state === 'ok' && wind && windHere && (
               <span
-                title={`MERRA-2 wind at 10 m, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)}, ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}
+                title={`MERRA-2 wind at 10 m ${windHere.where}, mean of ${hourRange(wind.hour_start_utc)} UTC on ${wind.time_utc.slice(0, 10)}, ${wind.resolution}. Colours: speed 0-${LEGEND_MAX_MS} m/s.`}
               >
-                wind (MERRA-2): {wind.mean_speed_ms.toFixed(1)} m/s from {compass(wind.mean_dir_deg)}
+                wind (MERRA-2): {windHere.speed.toFixed(1)} m/s from {compass(windHere.dir)}
                 <span className="wind-ramp" style={{ background: legendGradient() }} />
               </span>
             )}
