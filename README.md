@@ -253,11 +253,20 @@ Crosswhite fires, with arrival times, perimeters, metrics and a multi-fire site.
 
 Progress is tracked in the GitHub project **psagravity tasks**.
 
+## Online version
+
+The `master` branch is published on GitHub Pages ([.github/workflows/pages.yml](.github/workflows/pages.yml)):
+
+- **Website:** https://coolpig123.github.io/psagravity/ (map, drawing, regions; Predict and the wind need the Python
+  server, so they only work when the app runs locally)
+- **Fire explorer (all study fires, timeline):** https://coolpig123.github.io/psagravity/fire-explorer/
+
 ## Repository structure
 
 ```
 psagravity/
 ├── README.md, CLAUDE.md
+├── .github/workflows/     # pages.yml: publishes master on GitHub Pages
 ├── docs/                  # project figures (architecture.png)
 ├── gee_layers/            # model inputs from Google Earth Engine: terrain, fuels, dryness, weather (see its README)
 ├── spread_model/          # Alexandridis CA: spread probability per cell + most likely direction (see its README)
